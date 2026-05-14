@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mirage-matrix-macros",
+    "crates/mirage-matrix",
+    "crates/mirage-assets",
+    "crates/mirage-core",
+    "crates/mirage-geometry",
+    "crates/mirage-synapse",
+    "crates/mirage-compiler",
+    "crates/mirage-executor",
+    "crates/mirage-math",
+    "crates/mirage-platform",
+    "crates/mirage-renderer",
+    "crates/mirage-audio",
+    "crates/mirage-physics",
+    "crates/mirage-animation",
+    "crates/mirage-ai",
+    "crates/mirage-net",
+    "crates/mirage-ui",
+    "editor",
+    "project-manager",
+    "tools/mirage-builder",
+
+]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

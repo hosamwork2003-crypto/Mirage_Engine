@@ -1,0 +1,16 @@
+[package]
+name = "mirage-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# إضافة المسارات للموديولات الأخرى لكي يراها mirage-core
+mirage-geometry = { path = "../mirage-geometry" }
+mirage-synapse = { path = "../mirage-synapse" }
+mirage-executor = { path = "../mirage-executor" }
+
+# الاعتماديات الخارجية المطلوبة لعمل الموديولات الداخلية
+serde = { version = "1.0", features = ["derive"] }
+uuid = { version = "1.0", features = ["v4"] }
+bytemuck = { version = "1.15", features = ["derive"] }
+memmap2 = "0.9.10"

@@ -1,0 +1,7 @@
+[package]
+name = "mirage-geometry"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aligned-vec = "0.5"

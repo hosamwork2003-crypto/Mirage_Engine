@@ -1,0 +1,10 @@
+[package]
+name = "mirage-executor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mirage-geometry = { path = "../mirage-geometry" }
+mirage-synapse = { path = "../mirage-synapse" }
+mirage-compiler = { path = "../mirage-compiler" }
+rayon = "1.8"
