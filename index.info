@@ -1,0 +1,11 @@
+MirageEngine/
+├── Cargo.toml (Workspace)
+├── crates/
+│   ├── mirage-math/         # (أسرع في الكومبايل) فقط العمليات الرياضية
+│   ├── mirage-core/         # الـ Object Pool ونظام إدارة الذاكرة
+│   ├── mirage-renderer/     # محرك الرندرة الجديد المبني على WGPU/Vulkan
+│   ├── mirage-ui/           # نظام الواجهات (هنا سنضع سحر اللغة العربية)
+│   ├── mirage-animation/    # نظام التحريك المستقل
+│   └── mirage-platform/     # دعم الويندوز والموبايل (Android NDK)
+├── editor/                  # المحرر الاحترافي (Mirage Studio)
+└── examples/                # مشاريع تجريبية سريعة البناء
