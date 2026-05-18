@@ -1,114 +1,50 @@
-use std::any::Any;
-use uuid::Uuid;
-use petgraph::graph::DiGraph;
+// ===================================================================
+// ملف: crates/mirage-matrix/src/lib.rs
+// الوظيفة: النخاع الشوكي للمحرك (Neural Matrix) - عقل الـ Adaptive Runtime
+// ===================================================================
 
-/// 🌡️ تتبع "حرارة" البيانات (Behavioral Reflection)
-/// يسجل بدقة متى وكم مرة تم تعديل أو قراءة هذا المتغير
-#[derive(Debug, Clone, Default)]
-pub struct DataTelemetry {
-    pub read_count: u64,
-    pub write_count: u64,
-    pub last_mutation_frame: u64,
-}
+pub mod bus;
+pub mod topology;
 
-/// ⚙️ استراتيجية التنفيذ (Hardware Reflection)
-/// يقرر المحرك بناءً عليها كيف سيعالج هذا المتغير
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ExecutionStrategy {
-    Scalar,     // المعالجة العادية (للمتغيرات الباردة/البطيئة)
-    Simd,       // المعالجة المتوازية للـ CPU (للمتغيرات الساخنة)
-    GpuCompute, // المعالجة عبر كارت الشاشة (للمتغيرات الكثيفة جداً)
-}
+use mirage_core::pool::{RuntimeDirectory, Handle, AddressMapping};
+use std::collections::HashMap;
 
-/// 🧬 العقدة العصبية: الوحدة الأساسية في Mirage Matrix
-/// أي حقل (Field) في المحرك سيتحول إلى NeuralNode
-pub trait NeuralNode: Any + Send + Sync {
-    fn id(&self) -> Uuid;
-    fn telemetry(&self) -> &DataTelemetry;
-    fn strategy(&self) -> ExecutionStrategy;
-    
-    /// ⚡ النبضة: تُستدعى عندما تتغير قيمة المتغير
-    /// لتنبيه الـ Matrix بضرورة تحديث الأنظمة المعتمدة عليه
-    fn pulse(&mut self, frame: u64);
-    
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-}
-
-/// 🕸️ المصفوفة العصبية (The Mutation Graph)
-/// المخ الحقيقي للمحرك، حيث تُدار التبعيات (Dependencies)
+/// 🧠 Neural Matrix (المصفوفة العصبية): تدير العلاقات بين المقابض لتفعيل الـ Zero-Cost Dormancy
 pub struct NeuralMatrix {
-    /// نستخدم (Directed Graph) لتمثيل اتجاه تدفق البيانات
-    /// مثلاً: Position -> Physics -> Renderer
-    pub graph: DiGraph<Uuid, &'static str>,
-    pub frame_count: u64,
+    /// Dependency Graph (مخطط الاعتماديات): أي مقبض يؤثر على أي مقبض آخر؟
+    dependencies: HashMap<Handle, Vec<Handle>>,
 }
 
 impl NeuralMatrix {
-
-/// 🔗 إنشاء مشبك عصبي (Synapse) بين عقدتين
-    pub fn create_synapse(
-        &mut self, 
-        from: petgraph::graph::NodeIndex, 
-        to: petgraph::graph::NodeIndex, 
-        relation: &'static str
-    ) {
-        // إضافة سهم (Edge) يحدد اتجاه تأثير البيانات
-        self.graph.add_edge(from, to, relation);
-    }
-
-    /// ⚡ تتبع أثر التغيير (Impact Tracing)
-    /// عندما تتغير عقدة، من سيتأثر؟
-    pub fn trace_impact(&self, source: petgraph::graph::NodeIndex) {
-        println!("🔍 Mutation detected! Tracing data flow impact...");
-        
-        // البحث عن كل العقد المرتبطة بهذه العقدة
-        let mut affected_count = 0;
-        for neighbor in self.graph.neighbors(source) {
-            affected_count += 1;
-            let target_uuid = self.graph[neighbor];
-            println!("   ⚡ Pulse propagates to Node [{}]: {}", neighbor.index(), target_uuid);
-        }
-        
-        if affected_count == 0 {
-            println!("   🛑 Dead end. No systems depend on this data.");
-        }
-    }
-
     pub fn new() -> Self {
         Self {
-            graph: DiGraph::new(),
-            frame_count: 0,
+            dependencies: HashMap::new(),
         }
     }
 
-    /// وظيفة لزيادة عداد الإطارات (يتم استدعاؤها في الـ Main Loop)
-    pub fn tick(&mut self) {
-        self.frame_count += 1;
-        // هنا سيتم لاحقاً تقييم الـ Telemetry وتغيير الـ ExecutionStrategy ديناميكياً
+    /// ربط علاقة عصبية (Propagation Edge)
+    pub fn connect(&mut self, source: Handle, target: Handle) {
+        self.dependencies.entry(source).or_insert_with(Vec::new).push(target);
     }
 
-    pub fn dispatch_memory_pulse(&mut self, mutation_indices: Vec<u32>) {
-        if mutation_indices.is_empty() { return; }
+    /// Pulse Trace (تتبع النبضة): معرفة الأثر التنبؤي للتغيير
+    pub fn trace_impact(&self, source: Handle, directory: &RuntimeDirectory) -> Vec<AddressMapping> {
+        let mut impacts = Vec::new();
 
-        println!("🧠 Matrix: Processing {} mutations from MAVA Pool...", mutation_indices.len());
-
-        for index in mutation_indices {
-            // نحتاج لتحويل الـ Index الخاص بالـ Pool إلى NodeIndex في الـ Graph
-            // سنفترض حالياً وجود Mapping بسيط أو استخدام الـ Index مباشرة للاختبار
-            let node_idx = petgraph::graph::NodeIndex::new(index as usize);
-            
-            // إطلاق النبضة التفاعلية
-            self.trace_impact(node_idx);
+        if let Some(targets) = self.dependencies.get(&source) {
+            for target_handle in targets {
+                if let Some(mapping) = directory.get_mapping(*target_handle) {
+                    impacts.push(mapping);
+                }
+            }
         }
+        impacts
     }
-
 }
 
-// 1. استدعاء الماكرو من المصنع
+// استدعاء الماكرو المحدث من المصنع
 pub use mirage_matrix_macros::NeuralCluster;
 
-// 2. التجربة السحرية: تعريف كائن عادي جداً، ولكن نضع فوقه تاج الـ Matrix!
 #[derive(NeuralCluster)]
 pub struct PlayerTransform {
     pub x: f32,
@@ -116,36 +52,30 @@ pub struct PlayerTransform {
     pub z: f32,
 }
 
-// 3. كتابة اختبار (Test) لنرى النتيجة بأعيننا
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use mirage_core::oasis::OasisVirtualPage;
-    use mirage_math::batch::Vector3Batch16;
-    use std::io::Write;
+    const NUM_CHUNKS: u32 = 1024; // Local test const: number of chunks
 
- #[test]
-fn test_mava_to_matrix_synapse() {
-    use mirage_core::pool::Pool;
-    use mirage_core::pool::handle::Handle;
+    #[test]
+    fn test_mava_to_matrix_synapse() {
+        // ✅ إصلاح: تمرير عدد الكتل للمنشئ ليتوافق مع تحديث Core
+        let mut directory = RuntimeDirectory::new(NUM_CHUNKS as usize);
+        let mut matrix = NeuralMatrix::new();
 
-    // 1. إعداد الذاكرة والعقل
-    let mut pool: Pool<f32> = Pool::new();
-    let mut matrix = NeuralMatrix::new();
-
-    // 2. تسجيل كائن وهمي (كأنه قادم من Oasis)
-    let handle = pool.register_entity(1, 0, 0); 
-    let node_idx = matrix.graph.add_node(uuid::Uuid::new_v4());
-
-    // 3. محاكاة تعديل الكائن في الـ Pool
-    println!("🛠️ Modifying entity in Pool...");
-    pool.mark_dirty(handle);
-
-    // 4. نهاية الفريم: ترحيل التعديلات للمصفوفة العصبية
-    let dirty_indices = pool.commit_to_matrix();
-    matrix.dispatch_memory_pulse(dirty_indices);
-
-    println!("✅ Synapse Test Complete: Memory mutation triggered matrix pulse.");
-}
-
+        let player = PlayerTransform { x: 0.0, y: 0.0, z: 0.0 };
+        
+        // 1. توليد المقابض للكيان باستخدام الماكرو
+        let handles = player.wire_to_matrix(&mut matrix, &mut directory);
+        
+        if handles.len() >= 2 {
+            // 2. ربط الـ x بالـ y مثلاً
+            matrix.connect(handles[0], handles[1]);
+            
+            // 3. اختبار النبضة
+            let impacts = matrix.trace_impact(handles[0], &directory);
+            assert_eq!(impacts.len(), 1, "يجب أن يتأثر كيان واحد فقط");
+            println!("🚀 Matrix Trace Success! Affected: {:?}", impacts);
+        }
+    }
 }

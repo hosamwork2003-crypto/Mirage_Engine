@@ -4,6 +4,8 @@
 // ===================================================================
 
 use cranelift::prelude::*;
+
+pub mod runtime;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{Module, Linkage, default_libcall_names};
 

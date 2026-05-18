@@ -25,20 +25,25 @@ pub fn neural_cluster_derive(input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         impl #name {
-            pub fn wire_to_matrix(&self, matrix: &mut NeuralMatrix) -> Vec<petgraph::graph::NodeIndex> {
+            /// ربط الكيان بشبكة الـ Matrix وتوليد مقابض (Handles) سريعة
+            pub fn wire_to_matrix(
+                &self, 
+                matrix: &mut NeuralMatrix, 
+                directory: &mut mirage_core::pool::RuntimeDirectory
+            ) -> Vec<mirage_core::pool::Handle> {
                 println!("🔌 Wiring Cluster [{}] into the Neural Matrix...", stringify!(#name));
-                let mut indices = std::vec::Vec::new();
+                let mut handles = std::vec::Vec::new();
                 
                 #(
-                    let node_id = uuid::Uuid::new_v4();
-                    let idx = matrix.graph.add_node(node_id);
-                    indices.push(idx);
+                    // تسجيل حقل وهمي مؤقتاً في الدليل للحصول على Handle سريع
+                    let dummy_uuid = mirage_core::oasis::uuid::MirageUuid::new();
+                    let handle = directory.register_entity(dummy_uuid, 0, 0, 0);
+                    handles.push(handle);
                     
-                    // 💡 وجود #field_names هنا هو اللي بيحل الإيرور وبيخلي الماكرو يلف صح
-                    println!("   🟢 Wired Node [{}]: {}", stringify!(#field_names), node_id);
+                    println!("   🟢 Wired Node [{}]: Handle Index {}", stringify!(#field_names), handle.index());
                 )*
                 
-                indices 
+                handles 
             }
 
             #(
@@ -46,15 +51,17 @@ pub fn neural_cluster_derive(input: TokenStream) -> TokenStream {
                     &mut self, 
                     new_value: #field_types, 
                     matrix: &NeuralMatrix, 
-                    node_idx: petgraph::graph::NodeIndex
+                    directory: &mirage_core::pool::RuntimeDirectory,
+                    handle: mirage_core::pool::Handle
                 ) {
                     self.#field_names = new_value;
                     println!("💉 Mutation on [{}]: Value changed. Injecting pulse...", stringify!(#field_names));
-                    matrix.trace_impact(node_idx);
+                    // إرسال النبضة باستخدام Handle بدلاً من NodeIndex
+                    matrix.trace_impact(handle, directory);
                 }
             )*
         }
     };
 
-    TokenStream::from(expanded)
+    expanded.into()
 }

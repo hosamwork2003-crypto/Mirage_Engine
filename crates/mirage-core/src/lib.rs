@@ -4,6 +4,11 @@
 
 pub mod pool;
 pub mod oasis;
+pub mod runtime;
+pub mod archetype;
+pub mod continuation;
+
+pub use runtime::{ChunkState, ChunkThermals, ThermalSystem};
 
 use mirage_geometry::columnar::ColumnarPage;
 

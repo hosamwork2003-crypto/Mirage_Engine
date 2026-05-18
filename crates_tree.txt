@@ -1,0 +1,136 @@
+﻿crates/
+├── mirage-ai
+│   ├── src
+│   │   └── lib.rs
+│   └── Cargo.toml
+├── mirage-animation
+│   ├── src
+│   │   └── lib.rs
+│   └── Cargo.toml
+├── mirage-assets
+│   ├── src
+│   │   ├── lib.rs
+│   │   ├── loader.rs
+│   │   └── texture_loader.rs
+│   └── Cargo.toml
+├── mirage-audio
+│   ├── src
+│   │   └── lib.rs
+│   └── Cargo.toml
+├── mirage-compiler
+│   ├── src
+│   │   ├── lib.rs
+│   │   └── runtime.rs
+│   └── Cargo.toml
+├── mirage-compute
+│   ├── src
+│   │   └── lib.rs
+│   └── Cargo.toml
+├── mirage-core
+│   ├── src
+│   │   ├── archetype.rs
+│   │   ├── continuation.rs
+│   │   ├── lib.rs
+│   │   ├── oasis.rs
+│   │   ├── pool.rs
+│   │   └── runtime.rs
+│   └── Cargo.toml
+├── mirage-executor
+│   ├── src
+│   │   ├── fiber.rs
+│   │   └── lib.rs
+│   └── Cargo.toml
+├── mirage-geometry
+│   ├── src
+│   │   ├── bitmaps.rs
+│   │   ├── columnar.rs
+│   │   └── lib.rs
+│   └── Cargo.toml
+├── mirage-math
+│   ├── src
+│   │   ├── batch.rs
+│   │   ├── differential.rs
+│   │   ├── fused.rs
+│   │   ├── lib.rs
+│   │   ├── simd.rs
+│   │   └── transform.rs
+│   └── Cargo.toml
+├── mirage-matrix
+│   ├── src
+│   │   ├── bus.rs
+│   │   ├── lib.rs
+│   │   └── topology.rs
+│   └── Cargo.toml
+├── mirage-matrix-macros
+│   ├── src
+│   │   └── lib.rs
+│   └── Cargo.toml
+├── mirage-memory-oasis
+│   ├── src
+│   │   ├── oasis
+│   │   │   ├── mod.rs
+│   │   │   ├── streamer.rs
+│   │   │   └── uuid.rs
+│   │   └── main.rs
+│   └── Cargo.toml
+├── mirage-mkr-core
+│   ├── src
+│   │   ├── activation
+│   │   │   ├── delta.rs
+│   │   │   ├── field.rs
+│   │   │   ├── frontier.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── solver.rs
+│   │   │   ├── sparse.rs
+│   │   │   ├── validation.rs
+│   │   │   └── weights.rs
+│   │   ├── bridge
+│   │   │   ├── execution_bridge.rs
+│   │   │   ├── mod.rs
+│   │   │   └── renderer_bridge.rs
+│   │   ├── pool
+│   │   │   ├── field_handle.rs
+│   │   │   ├── handle.rs
+│   │   │   └── mod.rs
+│   │   ├── streaming
+│   │   │   └── mod.rs
+│   │   ├── emission.rs
+│   │   ├── main.rs
+│   │   ├── protocol.rs
+│   │   └── regions.rs
+│   └── Cargo.toml
+├── mirage-net
+│   ├── src
+│   │   └── lib.rs
+│   └── Cargo.toml
+├── mirage-physics
+│   ├── src
+│   │   └── lib.rs
+│   └── Cargo.toml
+├── mirage-platform
+│   ├── src
+│   │   ├── debug.rs
+│   │   ├── hardware.rs
+│   │   ├── lib.rs
+│   │   └── profiler.rs
+│   └── Cargo.toml
+├── mirage-renderer
+│   ├── src
+│   │   ├── compute.wgsl
+│   │   ├── gpu_driven.rs
+│   │   ├── lib.rs
+│   │   ├── main.rs
+│   │   ├── residency.rs
+│   │   ├── shader.wgsl
+│   │   └── thermal_classification.wgsl
+│   └── Cargo.toml
+├── mirage-runtime
+│   └── Cargo.toml
+├── mirage-synapse
+│   ├── src
+│   │   └── lib.rs
+│   └── Cargo.toml
+└── mirage-ui
+    ├── src
+    │   └── lib.rs
+    └── Cargo.toml

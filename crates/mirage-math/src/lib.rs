@@ -1,5 +1,7 @@
-#![feature(portable_simd)]
 
+pub mod simd;
 pub mod batch;
 pub mod differential;
 pub mod fused;
+
+pub mod transform;

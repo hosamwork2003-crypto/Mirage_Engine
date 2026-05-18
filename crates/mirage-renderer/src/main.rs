@@ -1,73 +1,343 @@
-use winit::{event::*, event_loop::EventLoop, window::WindowBuilder};
-use mirage_renderer::{MirageRenderer, SpawnRule, CameraUniform, NUM_ENTITIES, NUM_CHUNKS};
-use std::time::{Instant, Duration};
-use glam::{Vec3, Mat4};
-use std::sync::Arc;
+use winit::event::{Event, WindowEvent, ElementState};
+use winit::event_loop::EventLoop;
+use winit::window::WindowBuilder;
 
-struct InputState { w: bool, a: bool, s: bool, d: bool, space: bool, lshift: bool }
+use mirage_renderer::{
+    MirageRenderer,
+    CameraUniform,
+    NUM_CHUNKS,
+};
+
+use glam::{Vec3, Mat4};
+
+use std::sync::Arc;
+use std::sync::mpsc::{
+    channel,
+    Receiver,
+    Sender,
+};
+
+use mirage_core::pool::RuntimeDirectory;
+use mirage_core::runtime::ChunkState;
+use mirage_core::oasis::OasisManager;
+
+struct InputState {
+    w: bool,
+    a: bool,
+    s: bool,
+    d: bool,
+    k: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ChunkMetadata {
+    state: ChunkState,
+}
 
 fn main() {
-    let event_loop = EventLoop::new().unwrap();
-    let window = Arc::new(WindowBuilder::new().with_title("Mirage 100K - Stable MCF").build(&event_loop).unwrap());
-    let mut renderer = pollster::block_on(async { MirageRenderer::new(window.clone()).await });
 
-    renderer.dispatch_spawn_rule(SpawnRule { entity_count: NUM_ENTITIES, seed: 42, spread: 4.5, speed: 0.005 });
+    let event_loop =
+        EventLoop::new().unwrap();
 
-    let mut cam_pos = Vec3::new(0.0, -8.0, 5.0); 
-    let mut cam_yaw: f32 = 90.0;
-    let mut cam_pitch: f32 = -30.0;
-    let mut fov: f32 = 60.0;
-    let mut input = InputState { w: false, a: false, s: false, d: false, space: false, lshift: false };
-    let mut last_frame = Instant::now();
+    let window =
+        Arc::new(
+            WindowBuilder::new()
+                .with_title("Mirage Engine")
+                .build(&event_loop)
+                .unwrap(),
+        );
 
-    event_loop.run(move |event, elwt| {
-        match event {
-            Event::WindowEvent { ref event, window_id } if window_id == window.id() => match event {
-                WindowEvent::CloseRequested => elwt.exit(),
-                WindowEvent::KeyboardInput { event: KeyEvent { physical_key, state, .. }, .. } => {
-                    let is_pressed = *state == ElementState::Pressed;
-                    match physical_key {
-                        winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyW) => input.w = is_pressed,
-                        winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyA) => input.a = is_pressed,
-                        winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyS) => input.s = is_pressed,
-                        winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyD) => input.d = is_pressed,
-                        winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Space) => input.space = is_pressed,
-                        winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::ShiftLeft) => input.lshift = is_pressed,
-                        _ => {}
+    let mut renderer =
+        pollster::block_on(
+            MirageRenderer::new(window.clone()),
+        );
+
+    let mut directory =
+        RuntimeDirectory::new(
+            NUM_CHUNKS as usize,
+        );
+
+    let oasis =
+        Arc::new(
+            OasisManager::new(),
+        );
+
+    let (tx, rx):
+        (
+            Sender<(u32, Vec<u8>)>,
+            Receiver<(u32, Vec<u8>)>,
+        ) = channel();
+
+    let mut input_state =
+        InputState {
+            w: false,
+            a: false,
+            s: false,
+            d: false,
+            k: false,
+        };
+
+    let mut cam_pos =
+        Vec3::new(
+            0.0,
+            0.0,
+            50.0,
+        );
+
+    let mut last_cam_pos =
+        cam_pos;
+
+    let _ =
+        event_loop.run(
+            move |event, target| {
+
+                match event {
+
+                    Event::WindowEvent {
+                        event:
+                            WindowEvent::CloseRequested,
+                        ..
+                    } => {
+
+                        target.exit();
                     }
-                }
-                WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(_, y), .. } => { fov = (fov - y * 3.0).clamp(5.0, 110.0); }
-                WindowEvent::RedrawRequested => {
-                    let dt = last_frame.elapsed().as_secs_f32();
-                    if dt < 1.0 / 60.0 { std::thread::sleep(Duration::from_secs_f32(1.0 / 60.0 - dt)); }
-                    last_frame = Instant::now();
-                    let speed = 6.0 * dt;
-                    let forward = Vec3::new(cam_yaw.to_radians().cos(), cam_yaw.to_radians().sin(), 0.0);
-                    let right = Vec3::new(-cam_yaw.to_radians().sin(), cam_yaw.to_radians().cos(), 0.0);
-                    if input.w { cam_pos += forward * speed; } if input.s { cam_pos -= forward * speed; }
-                    if input.a { cam_pos -= right * speed; } if input.d { cam_pos += right * speed; }
-                    if input.space { cam_pos.z += speed; } if input.lshift { cam_pos.z -= speed; }
 
-                    // 🧠 الحل: التقاط موقع الكاميرا لاستخدامه في الـ Filter بسلام
-                    let current_cam_pos = cam_pos;
-                    let active_chunks: Vec<u32> = if current_cam_pos.distance(Vec3::ZERO) < 35.0 {
-                        (0..NUM_CHUNKS).collect() // تشغيل كل الكتل لو قريبة
-                    } else {
-                        Vec::new() // 💤 خمول صفري لو الكاميرا بعيدة جداً
-                    };
-                    
-                    let active_count = active_chunks.len() as u32;
-                    if active_count > 0 { renderer.upload_active_chunks(&active_chunks); }
-                    
-                    let view = Mat4::look_at_rh(cam_pos, cam_pos + Vec3::new(cam_yaw.to_radians().cos(), cam_yaw.to_radians().sin(), cam_pitch.to_radians().sin()), Vec3::Z);
-                    let proj = Mat4::perspective_rh(fov.to_radians(), 1280.0 / 720.0, 0.01, 1000.0);
-                    renderer.update_camera(CameraUniform { view_proj: (proj * view).to_cols_array_2d() });
-                    renderer.render(active_count).unwrap();
+                    Event::WindowEvent {
+                        event:
+                            WindowEvent::KeyboardInput {
+                                event,
+                                ..
+                            },
+                        ..
+                    } => {
+
+                        let pressed =
+                            event.state
+                                == ElementState::Pressed;
+
+                        if let winit::keyboard::Key::Character(c)
+                            = &event.logical_key
+                        {
+                            match c.as_str() {
+
+                                "w" => {
+                                    input_state.w = pressed;
+                                }
+
+                                "a" => {
+                                    input_state.a = pressed;
+                                }
+
+                                "s" => {
+                                    input_state.s = pressed;
+                                }
+
+                                "d" => {
+                                    input_state.d = pressed;
+                                }
+
+                                "k" => {
+                                    input_state.k = pressed;
+                                }
+
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    Event::AboutToWait => {
+
+                        //
+                        // CAMERA MOVEMENT
+                        //
+                        if input_state.w {
+                            cam_pos.z -= 1.0;
+                        }
+
+                        if input_state.s {
+                            cam_pos.z += 1.0;
+                        }
+
+                        if input_state.a {
+                            cam_pos.x -= 1.0;
+                        }
+
+                        if input_state.d {
+                            cam_pos.x += 1.0;
+                        }
+
+                        let cam_vel =
+                            cam_pos - last_cam_pos;
+
+                        last_cam_pos =
+                            cam_pos;
+
+                        //
+                        // STREAMED CHUNKS
+                        //
+                        while let Ok((idx, data))
+                            = rx.try_recv()
+                        {
+                            renderer
+                                .upload_chunk_to_vram(
+                                    idx,
+                                    &data,
+                                );
+
+                            directory
+                                .chunk_runtime_states
+                                [idx as usize]
+                                = ChunkState::Resident;
+                        }
+
+                        let mut active_chunks =
+                            Vec::new();
+
+                        //
+                        // CHUNK VISIBILITY
+                        //
+                        for i in 0..NUM_CHUNKS as usize {
+
+                            let chunk_pos =
+                                Vec3::new(
+                                    (i % 25) as f32 * 64.0,
+                                    0.0,
+                                    (i / 25) as f32 * 64.0,
+                                );
+
+                            let dist =
+                                cam_pos.distance(chunk_pos);
+
+                            //
+                            // HOT
+                            //
+                            if dist < 60.0 {
+
+                                directory
+                                    .chunk_runtime_states[i]
+                                    = ChunkState::Hot;
+
+                                active_chunks
+                                    .push(i as u32);
+                            }
+
+                            //
+                            // PREDICTIVE
+                            //
+                            else if dist < 120.0 {
+
+                                if directory
+                                    .chunk_runtime_states[i]
+                                    == ChunkState::Dormant
+                                {
+                                    let tx_c =
+                                        tx.clone();
+
+                                    let oasis_c =
+                                        oasis.clone();
+
+                                    std::thread::spawn(
+                                        move || {
+
+                                            let data =
+                                                oasis_c
+                                                    .load_chunk_data(
+                                                        0,
+                                                        i as u32,
+                                                    );
+
+                                            let _ =
+                                                tx_c.send(
+                                                    (
+                                                        i as u32,
+                                                        data,
+                                                    ),
+                                                );
+                                        },
+                                    );
+
+                                    directory
+                                        .chunk_runtime_states[i]
+                                        = ChunkState::Predictive;
+                                }
+
+                                else if directory
+                                    .chunk_runtime_states[i]
+                                    == ChunkState::Resident
+                                {
+                                    active_chunks
+                                        .push(i as u32);
+                                }
+                            }
+                        }
+
+                        //
+                        // GPU STATE UPLOAD
+                        //
+                        let raw_states =
+                            directory
+                                .get_raw_states();
+
+                        renderer
+                            .update_states_buffer(
+                                &raw_states,
+                            );
+
+                        if !active_chunks.is_empty() {
+
+                            renderer
+                                .upload_active_chunks(
+                                    &active_chunks,
+                                );
+                        }
+
+                        //
+                        // CAMERA
+                        //
+                        let view =
+                            Mat4::look_at_rh(
+                                cam_pos,
+                                cam_pos
+                                    + Vec3::new(
+                                        0.0,
+                                        0.0,
+                                        -1.0,
+                                    ),
+                                Vec3::Y,
+                            );
+
+                        let proj =
+                            Mat4::perspective_rh(
+                                45.0f32.to_radians(),
+                                1.2,
+                                0.1,
+                                1000.0,
+                            );
+
+                        renderer.update_camera(
+                            CameraUniform {
+                                view_proj:
+                                    (proj * view)
+                                        .to_cols_array_2d(),
+                            },
+                        );
+
+                        //
+                        // RENDER
+                        //
+                        renderer.reset_draw_count();
+                        let _ =
+                            renderer.render(
+                                active_chunks.len()
+                                    as u32,
+                            );
+
+                        let _ =
+                            cam_vel;
+                    }
+
+                    _ => {}
                 }
-                _ => {}
             },
-            Event::AboutToWait => window.request_redraw(),
-            _ => {}
-        }
-    }).unwrap();
+        );
 }

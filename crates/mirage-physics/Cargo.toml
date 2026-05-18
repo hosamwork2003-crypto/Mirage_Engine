@@ -1,6 +1,10 @@
 [package]
 name = "mirage-physics"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+mirage-core = { path = "../mirage-core" }
+mirage-math = { path = "../mirage-math" }
+glam = "0.32.1"
+

@@ -1,0 +1,18 @@
+[package]
+name = "mirage-mkr-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# V3 activation layer has no external std-external dependencies.
+
+# COMPAT: mirage-core provides ThermalSystem compatibility bridge.
+# TODO(V3-COMPAT): Remove once all downstream crates read ActivationField.
+mirage-core = { path = "../mirage-core" }
+
+# mirage-matrix provides TopologyGraph (activation influence graph).
+# Used by MKRWorld to wire topology influence into the activation field tick.
+mirage-matrix = { path = "../mirage-matrix" }
+
+# serde for Handle type in pool/handle.rs
+serde = { version = "1.0", features = ["derive"] }

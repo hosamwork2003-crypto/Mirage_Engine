@@ -18,11 +18,9 @@ members = [
     "crates/mirage-ai",
     "crates/mirage-net",
     "crates/mirage-ui",
-    "editor",
-    "project-manager",
-    "tools/mirage-builder",
-
+    "crates/mirage-compute", "crates/mirage-memory-oasis", "crates/mirage-mkr-core",
 ]
+default-members = ["crates/mirage-renderer"]
 
 [profile.release]
 opt-level = 3

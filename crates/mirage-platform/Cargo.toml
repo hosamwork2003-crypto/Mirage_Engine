@@ -1,6 +1,10 @@
 [package]
 name = "mirage-platform"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+mirage-core = { path = "../mirage-core" }
+mirage-math = { path = "../mirage-math" }
+num_cpus = "1.16"
+
