@@ -4,7 +4,8 @@
 // ===================================================================
 
 pub mod bus;
-pub mod topology;
+
+// Topology moved to mirage-mts; mirage-matrix contains math primitives only.
 
 use mirage_core::pool::{RuntimeDirectory, Handle, AddressMapping};
 use std::collections::HashMap;

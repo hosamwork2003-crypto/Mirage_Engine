@@ -38,8 +38,6 @@
 /// - Upload budgeting: Limit bandwidth per frame
 /// ===================================================================
 
-use std::collections::HashMap;
-
 /// GPU residency state for a chunk
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResidencyState {

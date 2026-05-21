@@ -1564,6 +1564,13 @@ name = "mirage-audio"
 version = "0.1.0"
 
 [[package]]
+name = "mirage-cek"
+version = "0.1.0"
+dependencies = [
+ "mirage-executor",
+]
+
+[[package]]
 name = "mirage-compiler"
 version = "0.1.0"
 dependencies = [
@@ -1593,6 +1600,7 @@ dependencies = [
 name = "mirage-executor"
 version = "0.1.0"
 dependencies = [
+ "crossbeam-deque",
  "mirage-compiler",
  "mirage-core",
  "mirage-geometry",
@@ -1627,6 +1635,7 @@ dependencies = [
  "mirage-core",
  "mirage-math",
  "mirage-matrix-macros",
+ "mirage-mts",
  "petgraph",
  "uuid",
 ]
@@ -1648,9 +1657,32 @@ version = "0.1.0"
 name = "mirage-mkr-core"
 version = "0.1.0"
 dependencies = [
+ "mirage-cek",
+ "mirage-compute",
  "mirage-core",
+ "mirage-executor",
  "mirage-matrix",
+ "mirage-morphogenic",
+ "mirage-mts",
+ "mirage-query",
+ "mirage-synapse",
+ "rayon",
  "serde",
+]
+
+[[package]]
+name = "mirage-morphogenic"
+version = "0.1.0"
+dependencies = [
+ "mirage-core",
+]
+
+[[package]]
+name = "mirage-mts"
+version = "0.1.0"
+dependencies = [
+ "mirage-core",
+ "mirage-morphogenic",
 ]
 
 [[package]]
@@ -1674,6 +1706,10 @@ dependencies = [
  "mirage-math",
  "num_cpus",
 ]
+
+[[package]]
+name = "mirage-query"
+version = "0.1.0"
 
 [[package]]
 name = "mirage-renderer"

@@ -206,6 +206,13 @@ impl RegionMap {
         Self { regions, regions_wide: rw, regions_tall: rt, field_width: width, field_height: height }
     }
 
+    /// Construct and compute a region map directly from an activation field.
+    pub fn compute_from_field(field: &ActivationField) -> Self {
+        let mut map = Self::new(field.width, field.height);
+        map.refresh(field);
+        map
+    }
+
     /// Scan the activation field and update all region activity states.
     ///
     /// O(N) where N = total cells.  Run once per tick after the solver step.

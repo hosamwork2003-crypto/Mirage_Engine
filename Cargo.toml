@@ -19,6 +19,10 @@ members = [
     "crates/mirage-net",
     "crates/mirage-ui",
     "crates/mirage-compute", "crates/mirage-memory-oasis", "crates/mirage-mkr-core",
+    "crates/mirage-query",
+    "crates/mirage-mts",
+    "crates/mirage-cek",
+    "crates/mirage-morphogenic",
 ]
 default-members = ["crates/mirage-renderer"]
 

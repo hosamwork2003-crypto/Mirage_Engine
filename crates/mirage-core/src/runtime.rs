@@ -84,9 +84,6 @@
 /// - GPU uses state enum directly for SIMD branching
 /// ===================================================================
 
-
-use std::sync::atomic::{AtomicU8, Ordering};
-
 // =====================================================================
 // THERMAL CONSTANTS - Hardware-tuned thresholds
 // =====================================================================

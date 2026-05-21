@@ -17,6 +17,10 @@
 │   ├── src
 │   │   └── lib.rs
 │   └── Cargo.toml
+├── mirage-cek
+│   ├── src
+│   │   └── lib.rs
+│   └── Cargo.toml
 ├── mirage-compiler
 │   ├── src
 │   │   ├── lib.rs
@@ -38,7 +42,8 @@
 ├── mirage-executor
 │   ├── src
 │   │   ├── fiber.rs
-│   │   └── lib.rs
+│   │   ├── lib.rs
+│   │   └── scheduler.rs
 │   └── Cargo.toml
 ├── mirage-geometry
 │   ├── src
@@ -87,7 +92,8 @@
 │   │   ├── bridge
 │   │   │   ├── execution_bridge.rs
 │   │   │   ├── mod.rs
-│   │   │   └── renderer_bridge.rs
+│   │   │   ├── renderer_bridge.rs
+│   │   │   └── renderer_validation.rs
 │   │   ├── pool
 │   │   │   ├── field_handle.rs
 │   │   │   ├── handle.rs
@@ -95,9 +101,16 @@
 │   │   ├── streaming
 │   │   │   └── mod.rs
 │   │   ├── emission.rs
+│   │   ├── emission_validation.rs
+│   │   ├── lib.rs
 │   │   ├── main.rs
 │   │   ├── protocol.rs
-│   │   └── regions.rs
+│   │   ├── regions.rs
+│   │   └── region_validation.rs
+│   └── Cargo.toml
+├── mirage-mts
+│   ├── src
+│   │   └── lib.rs
 │   └── Cargo.toml
 ├── mirage-net
 │   ├── src
@@ -113,6 +126,13 @@
 │   │   ├── hardware.rs
 │   │   ├── lib.rs
 │   │   └── profiler.rs
+│   └── Cargo.toml
+├── mirage-query
+│   ├── src
+│   │   ├── columnar.rs
+│   │   ├── kernel.rs
+│   │   ├── lib.rs
+│   │   └── query.rs
 │   └── Cargo.toml
 ├── mirage-renderer
 │   ├── src

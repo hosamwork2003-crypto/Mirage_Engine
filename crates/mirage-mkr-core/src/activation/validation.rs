@@ -35,7 +35,7 @@
 use super::field::ActivationField;
 use super::frontier::PropagationFrontier;
 use super::sparse::{step_sparse, SparseSolverResult, SPARSE_DIVERGENCE_EPSILON};
-use super::solver::SolverStepStats;
+use super::solver::{ActivationSolver, SolverStepStats};
 
 
 // =====================================================================
@@ -295,6 +295,8 @@ pub struct SparseValidationRunner {
     pub mode:            ValidationMode,
     /// Accumulated report across all ticks.
     pub report:          FrontierValidationReport,
+    /// Pre-tick frontier snapshot.
+    pub pre_tick_frontier: Option<PropagationFrontier>,
 }
 
 impl SparseValidationRunner {
@@ -306,6 +308,7 @@ impl SparseValidationRunner {
             sparse_pres_scratch: Vec::new(),
             mode:                ValidationMode::Disabled,
             report:              FrontierValidationReport::new(),
+            pre_tick_frontier:   None,
         }
     }
 
@@ -337,38 +340,43 @@ impl SparseValidationRunner {
         live_field:     &ActivationField,
         frontier:       &PropagationFrontier,
         topo_influence: &[f32],
+        solver:         &mut ActivationSolver,
     ) -> Option<ParityComparisonResult> {
         if !self.is_active() { return None; }
 
-        // Sync shadow with the state BEFORE the full solver ran
-        // (snapshot captured by FieldDeltaTracker — we use the shadow
-        // as a second field that we run the sparse solver on).
-        //
-        // NOTE: For true parity, shadow_field should start from the same
-        // pre-tick state as the live field.  We approximate by copying
-        // the LIVE FIELD after the full solver ran, then running sparse
-        // on a copy of the PRE-TICK state.
-        //
-        // TODO(V3-SPARSE-VALIDATION): To achieve true pre-tick snapshot
-        // comparison, MKRWorld must snapshot the field before Phase 1
-        // and provide it here.  For now, this runner demonstrates the
-        // parity infrastructure; exact pre-tick comparison is a future step.
+        let pre_frontier = self.pre_tick_frontier.take().unwrap_or_else(|| frontier.clone());
 
-        // Run sparse on shadow (which is currently the live post-full state
-        // — for testing the infrastructure only, not true pre-tick parity).
-        let sparse_result = step_sparse(
-            &mut self.shadow_field,
-            frontier,
-            topo_influence,
-            &mut self.sparse_diff_scratch,
-            &mut self.sparse_pres_scratch,
-        );
+        let sparse_result = if self.mode == ValidationMode::SparseAuthoritative {
+            // Under SparseAuthoritative mode, the live field has been advanced by step_sparse.
+            // The shadow field must be advanced by the FULL solver.
+            solver.step(&mut self.shadow_field, topo_influence);
+            // Return dummy result for recording
+            SparseSolverResult::default()
+        } else {
+            // Under Parallel mode, the live field has been advanced by the FULL solver.
+            // The shadow field must be advanced by the SPARSE solver.
+            step_sparse(
+                &mut self.shadow_field,
+                &pre_frontier,
+                topo_influence,
+                &mut self.sparse_diff_scratch,
+                &mut self.sparse_pres_scratch,
+            )
+        };
 
-        // Compare shadow (sparse output) against live (full output).
+        // Align fields based on authority mode: full solver result is always full_field,
+        // sparse solver result is always sparse_field.
+        let (full_field, sparse_field) = if self.mode == ValidationMode::SparseAuthoritative {
+            (&self.shadow_field, live_field)
+        } else {
+            (live_field, &self.shadow_field)
+        };
+
+        // Compare shadow against live.
         let parity = ParityComparisonResult::compute(
-            live_field,
-            &self.shadow_field,
-            frontier,
+            full_field,
+            sparse_field,
+            &pre_frontier,
             VALIDATION_ACTIVATION_EPSILON,
             VALIDATION_PROBABILITY_EPSILON,
             VALIDATION_PRESSURE_EPSILON,
@@ -382,12 +390,13 @@ impl SparseValidationRunner {
     ///
     /// Call this BEFORE running the full solver so the shadow field
     /// has the same initial state as the live field.
-    pub fn snapshot_pre_tick(&mut self, live_field: &ActivationField) {
+    pub fn snapshot_pre_tick(&mut self, live_field: &ActivationField, frontier: &PropagationFrontier) {
         debug_assert_eq!(
             self.shadow_field.cells.len(), live_field.cells.len(),
             "shadow field size must match live field"
         );
         self.shadow_field.cells.copy_from_slice(&live_field.cells);
+        self.pre_tick_frontier = Some(frontier.clone());
     }
 }
 
@@ -501,7 +510,7 @@ mod tests {
         let mut runner = SparseValidationRunner::new(4, 4);
         let field    = ActivationField::new(4, 4);
         let frontier = PropagationFrontier::new(4, 4);
-        let result = runner.validate_tick(&field, &frontier, &[]);
+        let result = runner.validate_tick(&field, &frontier, &[], &mut ActivationSolver::new());
         assert!(result.is_none(), "disabled runner should return None");
     }
 
@@ -511,7 +520,7 @@ mod tests {
         runner.enable_parallel();
         let field    = ActivationField::new(4, 4);
         let frontier = PropagationFrontier::new(4, 4);
-        let result = runner.validate_tick(&field, &frontier, &[]);
+        let result = runner.validate_tick(&field, &frontier, &[], &mut ActivationSolver::new());
         assert!(result.is_some(), "parallel runner should return parity result");
     }
 

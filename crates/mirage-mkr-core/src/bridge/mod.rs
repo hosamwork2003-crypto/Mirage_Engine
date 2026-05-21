@@ -25,6 +25,11 @@
 //                    (continuous probability → discrete ChunkState)
 //                    STATUS: Stable. Translation-only. No state owned.
 //
+// renderer_validation — Shadow validation layer for sparse renderer path.
+//                        Compares apply_changed_cells() against
+//                        apply_to_directory().
+//                        STATUS: Non-authoritative validation only.
+//
 // execution_bridge — EmissionRequest → SchedulingRequest
 //                    (emission layer output → executor-compatible descriptor)
 //                    STATUS: Stable. Stateless struct. Pure translation.
@@ -50,8 +55,19 @@
 // ===================================================================
 
 pub mod renderer_bridge;
+pub mod renderer_validation;
 pub mod execution_bridge;
 
 pub use renderer_bridge::RendererBridge;
 pub use renderer_bridge::probability_to_chunk_state;
-pub use execution_bridge::{ExecutionBridge, SchedulingRequest, DEFAULT_DEADLINE_FRAMES};
+
+pub use renderer_validation::{
+    RendererParityReport,
+    RendererShadowValidator,
+};
+
+pub use execution_bridge::{
+    ExecutionBridge,
+    SchedulingRequest,
+    DEFAULT_DEADLINE_FRAMES,
+};

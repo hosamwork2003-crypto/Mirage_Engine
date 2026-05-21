@@ -61,6 +61,7 @@
 // ===================================================================
 
 use super::field::ActivationField;
+use super::frontier::PropagationFrontier;
 
 /// Statistics produced by a single solver step.
 ///
@@ -162,6 +163,31 @@ impl ActivationSolver {
         }
     }
 
+    /// Execute a sparse activation field step over frontier cells only.
+    pub fn step_sparse(
+        &mut self,
+        field: &mut ActivationField,
+        frontier: &PropagationFrontier,
+        topo_influence: &[f32],
+    ) -> SolverStepStats {
+        let _result = super::sparse::step_sparse(
+            field,
+            frontier,
+            topo_influence,
+            &mut self.diffusion_scratch,
+            &mut self.pressure_scratch,
+        );
+
+        self.step_count = self.step_count.wrapping_add(1);
+
+        SolverStepStats {
+            mean_activation:            field.mean_activation(),
+            mean_execution_probability: field.mean_execution_probability(),
+            high_probability_count:     field.count_above_probability(0.5),
+            step:                       self.step_count,
+        }
+    }
+
     // ------------------------------------------------------------------
     // Pressure propagation
     // ------------------------------------------------------------------
@@ -184,45 +210,59 @@ impl ActivationSolver {
     /// # TODO(V3-TOPOLOGY)
     /// The TopologyGraph must expose an `influence_scalars()` method
     /// that returns a `&[f32]` aligned to field cell indices.
-    fn propagate_pressure(&mut self, field: &mut ActivationField, topo_influence: &[f32]) {
-        let n = field.len();
-        let w = field.width;
-        let h = field.height;
+fn propagate_pressure(&mut self, field: &mut ActivationField, topo_influence: &[f32]) {
+    let n = field.len();
+    let w = field.width;
+    let h = field.height;
 
-        // Resize scratch without initialising — every element is written below.
-        if self.pressure_scratch.len() != n {
-            self.pressure_scratch.resize(n, 0.0);
-        }
-
-        // Step A: inject topology influence into pressure.
-        for (i, cell) in field.cells.iter().enumerate() {
-            let infl = if i < topo_influence.len() {
-                topo_influence[i]
-            } else {
-                0.0
-            };
-            // Additive blend: topology pull lifts pressure, capped at 1.0.
-            self.pressure_scratch[i] = (cell.pressure + infl * 0.3).min(1.0);
-        }
-
-        // Step B: 4-neighbour pressure average (smooths discontinuities).
-        for y in 0..h {
-            for x in 0..w {
-                let idx = y * w + x;
-                let center = self.pressure_scratch[idx];
-
-                let north = if y > 0 { self.pressure_scratch[(y - 1) * w + x] } else { center };
-                let south = if y + 1 < h { self.pressure_scratch[(y + 1) * w + x] } else { center };
-                let west  = if x > 0 { self.pressure_scratch[y * w + (x - 1)] } else { center };
-                let east  = if x + 1 < w { self.pressure_scratch[y * w + (x + 1)] } else { center };
-
-                // Weighted average: 50% self, 12.5% each neighbour.
-                field.cells[idx].pressure =
-                    (center * 0.5 + (north + south + west + east) * 0.125).clamp(0.0, 1.0);
-            }
-        }
+    if self.pressure_scratch.len() != n {
+        self.pressure_scratch.resize(n, 0.0);
     }
 
+    // حد أدنى لقطع الضوضاء العائمة ومنع انتشار الـ tails الأزلية
+    const NOISE_FLOOR: f32 = 1e-4;
+
+    // Step A: inject topology influence into pressure.
+    for (i, cell) in field.cells.iter().enumerate() {
+        let infl = if i < topo_influence.len() { topo_influence[i] } else { 0.0 };
+        let mut p = cell.pressure + infl * 0.3;
+        
+        // تطبيق الـ Noise Floor فوراً أثناء الحقن
+        if p < NOISE_FLOOR { p = 0.0; }
+        self.pressure_scratch[i] = p.min(1.0);
+    }
+
+    // Step B: 4-neighbour pressure average
+    for y in 0..h {
+        for x in 0..w {
+            let idx = y * w + x;
+            let center = self.pressure_scratch[idx];
+
+            // إذا كان المركز وجيرانه أصفاراً، تخطي الحساب لضمان عدم حدوث float jitter
+            if center == 0.0 {
+                let north = if y > 0 { self.pressure_scratch[(y - 1) * w + x] } else { 0.0 };
+                let south = if y + 1 < h { self.pressure_scratch[(y + 1) * w + x] } else { 0.0 };
+                let west  = if x > 0 { self.pressure_scratch[y * w + (x - 1)] } else { 0.0 };
+                let east  = if x + 1 < w { self.pressure_scratch[y * w + (x + 1)] } else { 0.0 };
+                
+                if north == 0.0 && south == 0.0 && west == 0.0 && east == 0.0 {
+                    field.cells[idx].pressure = 0.0;
+                    continue;
+                }
+            }
+
+            let north = if y > 0 { self.pressure_scratch[(y - 1) * w + x] } else { center };
+            let south = if y + 1 < h { self.pressure_scratch[(y + 1) * w + x] } else { center };
+            let west  = if x > 0 { self.pressure_scratch[y * w + (x - 1)] } else { center };
+            let east  = if x + 1 < w { self.pressure_scratch[y * w + (x + 1)] } else { center };
+
+            let mut final_pressure = center * 0.5 + (north + south + west + east) * 0.125;
+            if final_pressure < NOISE_FLOOR { final_pressure = 0.0; }
+            
+            field.cells[idx].pressure = final_pressure.clamp(0.0, 1.0);
+        }
+    }
+}
     // ------------------------------------------------------------------
     // Targeted injection helpers (convenience wrappers for MKRWorld)
     // ------------------------------------------------------------------

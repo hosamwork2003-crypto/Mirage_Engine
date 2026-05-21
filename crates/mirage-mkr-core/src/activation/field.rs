@@ -229,7 +229,7 @@ impl ActivationField {
         }
     }
 
-    // ------------------------------------------------------------------
+// ------------------------------------------------------------------
     // Decay
     // ------------------------------------------------------------------
 
@@ -238,16 +238,22 @@ impl ActivationField {
     ///
     /// Entropy grows in cells with low activation (idle drift) and decays
     /// in cells with high activation (active clarity).
-    ///
-    /// This pass is fully branchless and vectorisable.
     pub fn decay(&mut self) {
+        // حاجز قطع لمنع الذيول الحسابية اللانهائية وعزل الضوضاء ميكروسكوبية الفروقات
+        const NOISE_FLOOR: f32 = 1e-4;
+
         for cell in &mut self.cells {
             cell.heat *= HEAT_DECAY;
+            if cell.heat < NOISE_FLOOR {
+                cell.heat = 0.0;
+            }
+
             cell.pressure *= 1.0 - PRESSURE_STABILISATION;
+            if cell.pressure < NOISE_FLOOR {
+                cell.pressure = 0.0;
+            }
 
             // Entropy rises when idle, falls when active.
-            // `cell.activation` is from the *previous* frame — intentionally
-            // one step behind to avoid circular dependency within a single tick.
             let idle_weight = 1.0 - cell.activation;
             cell.entropy = (cell.entropy
                 + ENTROPY_GROWTH * idle_weight
@@ -261,23 +267,11 @@ impl ActivationField {
     // ------------------------------------------------------------------
 
     /// Diffuse heat across the grid (4-neighbour stencil, Neumann BC).
-    ///
-    /// Uses a read-then-write two-buffer approach to avoid in-place
-    /// aliasing.  The `scratch` buffer is provided by the caller (solver)
-    /// to avoid allocation on the hot path.
-    ///
-    /// # Algorithm
-    /// For each cell (i,j):
-    ///   new_heat = old_heat + α × (sum_of_neighbours − 4 × old_heat)
-    ///
-    /// Neumann boundary condition: missing neighbours are treated as
-    /// equal to the cell itself, so the cell doesn't lose heat at edges.
     pub fn diffuse(&mut self, scratch: &mut Vec<f32>) {
         let n = self.cells.len();
         let w = self.width;
         let h = self.height;
 
-        // Resize scratch buffer without zeroing — we will write every element.
         if scratch.len() != n {
             scratch.resize(n, 0.0);
         }
@@ -296,9 +290,13 @@ impl ActivationField {
             }
         }
 
-        // Write back
+        // Write back with strict noise clamping to prevent minor energy fragments from bleeding infinitely
         for (cell, &new_heat) in self.cells.iter_mut().zip(scratch.iter()) {
-            cell.heat = new_heat.clamp(0.0, 1.0);
+            let mut h = new_heat;
+            if h < 1e-4 {
+                h = 0.0;
+            }
+            cell.heat = h.clamp(0.0, 1.0);
         }
     }
 
@@ -308,22 +306,15 @@ impl ActivationField {
 
     /// Recompute the `activation` scalar for every cell from the current
     /// heat, pressure, and entropy values.
-    ///
-    /// Formula (branchless, vectorisable):
-    ///
-    /// ```text
-    /// activation = clamp(heat × 0.55 + pressure × 0.35 + (1 − entropy) × 0.10, 0, 1)
-    /// ```
-    ///
-    /// Weights are intentionally unequal: heat is the dominant driver,
-    /// pressure from neighbours amplifies it, entropy suppresses idle
-    /// regions.
-    ///
-    /// # TODO(V3-CEK)
-    /// Weights will eventually be output from `ExecutionWeights::compute_activation()`
-    /// which will itself receive CEK-computed scalars.
     pub fn recompute_activation(&mut self) {
         for cell in &mut self.cells {
+            // إذا كانت الخلية خاملة حرارياً وديناميكياً، يتم قطع الـ activation إلى 0.0 مطلقاً
+            // هذا يمنع زحف الأنتروبي المستمر من تسريب فروقات وهمية تتجاوز الـ Epsilon للـ Tracker
+            if cell.heat < 1e-4 && cell.pressure < 1e-4 {
+                cell.activation = 0.0;
+                continue;
+            }
+
             cell.activation = (cell.heat * 0.55
                 + cell.pressure * 0.35
                 + (1.0 - cell.entropy) * 0.10)
@@ -386,6 +377,52 @@ impl ActivationField {
             .iter()
             .filter(|c| c.execution_probability > threshold)
             .count()
+    }
+}
+
+impl mirage_compute::CellField for ActivationField {
+    fn set_execution_probability(&mut self, index: usize, prob: f32) {
+        if index < self.cells.len() {
+            self.cells[index].execution_probability = prob;
+        }
+    }
+    fn get_execution_probability(&self, index: usize) -> f32 {
+        if index < self.cells.len() {
+            self.cells[index].execution_probability
+        } else {
+            0.0
+        }
+    }
+    fn len(&self) -> usize {
+        self.cells.len()
+    }
+}
+
+// =====================================================================
+// CekEvalField — mirage-cek trait impl
+// =====================================================================
+//
+// Implements the minimal CEK field interface so that CEKMachine
+// continuation closures can mutate the activation field without
+// creating a circular crate dependency.
+
+impl mirage_cek::CekEvalField for ActivationField {
+    fn cell_count(&self) -> usize {
+        self.cells.len()
+    }
+
+    fn get_exec_prob(&self, index: usize) -> f32 {
+        if index < self.cells.len() {
+            self.cells[index].execution_probability
+        } else {
+            0.0
+        }
+    }
+
+    fn set_exec_prob(&mut self, index: usize, value: f32) {
+        if index < self.cells.len() {
+            self.cells[index].execution_probability = value.clamp(0.0, 1.0);
+        }
     }
 }
 

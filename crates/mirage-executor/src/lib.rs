@@ -1,5 +1,5 @@
 /// ===================================================================
-/// mirage-executor/src/lib.rs  (V3 — Federated Stabilization Pass)
+/// mirage-executor/src/lib.rs  (V4 — Stabilization Pass)
 /// PURPOSE: Mirage Executor — Passive Execution Backend
 ///
 /// ---------------------------------------------------------------
@@ -39,222 +39,281 @@
 ///
 /// SCHEDULING PRIORITY (COMPAT-ONLY):
 /// HOT > RESIDENT > PREDICTIVE > DORMANT
+///
+/// ---------------------------------------------------------------
+/// V4 AUTHORITY BOUNDARY ADDITIONS (Stabilization Pass)
+/// ---------------------------------------------------------------
+///
+/// EXECUTOR IS FULLY PASSIVE:
+/// In V4, ThermalScheduler has been made fully passive:
+///   * Removed SynapseRegistry from ThermalScheduler.
+///   * Removed ThermalSystem from ThermalScheduler.
+///   * Deprecated schedule_frame().
+///   * Replaced scheduling with ExecutionRequest-driven schedule_requests().
+///
+/// TODO(V4-OASIS-AUTHORITY): The executor must not make OASIS
+/// residency decisions. Streaming hints come from ExecutionRequest
+/// is_prefetch_hint, which the streaming coordinator reads.
+/// The executor must not call OASIS APIs directly.
+///
+/// TODO(V4-RENDERER-PASSIVE): The executor must not write
+/// ChunkState to RuntimeDirectory. Only RendererBridge is authorized
+/// to do this. Verify that execute_task() and schedule_frame()
+/// do not acquire a mutable RuntimeDirectory reference.
+/// Verified: currently clean. Maintain this invariant.
 /// ===================================================================
-
-
-use mirage_geometry::columnar::ColumnarPage;
-use mirage_synapse::SynapseRegistry;
-use mirage_compiler::MirageCompiler;
-// TODO(V3-EXECUTOR-PASSIVE): Arc removed — executor does not share ownership
-// of runtime state across threads.  Re-add only when fiber pool uses Arc<Mutex<>>.
 
 // Re-export thermal types
 pub use mirage_core::runtime::{ChunkState, ThermalSystem, ChunkThermals};
 
 pub mod fiber;
+pub mod scheduler;
 
-/// Chunk task for execution
-#[derive(Debug, Clone)]
-pub struct ChunkTask {
-    pub chunk_idx: u32,
-    pub state: ChunkState,
+// =====================================================================
+// AUTHORITY AND CAPABILITY TOKENS
+// =====================================================================
+
+/// Authority token enforcing that only authorized bridge/scheduler owner components
+/// can create authoritative execution requests.
+#[derive(Debug)]
+pub struct ExecutionBridgeAuthority {
+    _private: (),
+}
+
+impl ExecutionBridgeAuthority {
+    pub(crate) fn new() -> Self {
+        Self { _private: () }
+    }
+}
+
+/// Compile-time capability token authorizing a component to traverse
+/// the propagation frontier and emit execution requests.
+#[derive(Debug)]
+pub struct FrontierExecutionCapability {
+    _private: (),
+}
+
+impl FrontierExecutionCapability {
+    pub(crate) fn new() -> Self {
+        Self { _private: () }
+    }
+}
+
+/// Compile-time capability token authorizing a component to submit
+/// execution requests/tasks to the scheduler.
+#[derive(Debug)]
+pub struct SchedulerCapability {
+    _private: (),
+}
+
+impl SchedulerCapability {
+    pub(crate) fn new() -> Self {
+        Self { _private: () }
+    }
+}
+
+// =====================================================================
+// PROTOCOL TYPES (V4 Authoritative Pipeline)
+// =====================================================================
+
+/// Compatibility scheduling request, transitional infrastructure only in V4.
+#[derive(Debug, Clone, Copy)]
+pub struct SchedulingRequest {
+    pub cell_index: usize,
     pub priority: f32,
     pub deadline_frame: u64,
+    pub is_prefetch_hint: bool,
 }
 
-impl PartialEq for ChunkTask {
-    fn eq(&self, other: &Self) -> bool {
-        self.chunk_idx == other.chunk_idx
-    }
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExecutionRequestId(pub u64);
 
-impl Eq for ChunkTask {}
-
-impl Ord for ChunkTask {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Higher priority first, then lower deadline first
-        other.priority.partial_cmp(&self.priority)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| self.deadline_frame.cmp(&other.deadline_frame))
+impl std::fmt::Display for ExecutionRequestId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ReqID({})", self.0)
     }
 }
 
-impl PartialOrd for ChunkTask {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
+/// Authoritative V4 execution request.
+#[derive(Debug, Clone, Copy)]
+pub struct ExecutionRequest {
+    cell_index: usize,
+    priority: f32,
+    deadline_frame: u64,
+    is_prefetch_hint: bool,
+    captured_probability: f32,
+    capability_mask: u32,
+    target_identity: u32,
+    intent_flags: u32,
+    advisory_hints: Option<u32>,
+    originating_tick: u64,
+    emission_source_id: u32,
+    originating_frontier_generation: u64,
+    deterministic_sequence_index: u64,
+    request_id: ExecutionRequestId,
 }
 
-/// Thermal-aware task scheduler
-pub struct ThermalScheduler {
-    pub registry: SynapseRegistry,
-    pub compiler: MirageCompiler,
-    pub thermal_system: ThermalSystem,
-    
-    /// Task queue (priority heap)
-    task_queue: std::collections::BinaryHeap<ChunkTask>,
-    
-    /// Current frame
-    frame: u64,
-    
-    /// Max tasks per frame to execute.
-    /// TODO(V3-EXECUTOR-PASSIVE): This will become the FiberPool emission
-    /// budget once ThermalScheduler is replaced by field-driven scheduling.
-    #[allow(dead_code)]
-    max_tasks_per_frame: usize,
-    
-    /// Mutation rate threshold for JIT compilation (default 0.3)
-    pub mutation_threshold: f32,
-}
-
-impl ThermalScheduler {
-    pub fn new(num_chunks: usize) -> Self {
-        Self {
-            registry: SynapseRegistry::new(),
-            compiler: MirageCompiler::new(),
-            thermal_system: ThermalSystem::new(num_chunks),
-            task_queue: std::collections::BinaryHeap::new(),
-            frame: 0,
-            max_tasks_per_frame: 128,
-            mutation_threshold: 0.3,
-        }
-    }
-
-    /// Schedule chunk tasks based on thermal state
-    pub fn schedule_frame(&mut self) {
-        self.task_queue.clear();
-
-        // Use safe public API to obtain current states
-        let raw = self.thermal_system.get_raw_states();
-
-        for (chunk_idx, &state_u32) in raw.iter().enumerate() {
-            let state = match state_u32 {
-                3 => ChunkState::Hot,
-                2 => ChunkState::Resident,
-                1 => ChunkState::Predictive,
-                _ => ChunkState::Dormant,
-            };
-
-            let priority = match state {
-                ChunkState::Hot => 1.0,
-                ChunkState::Resident => 0.7,
-                ChunkState::Predictive => 0.3,
-                ChunkState::Dormant => 0.0,
-            };
-
-            if priority > 0.0 {
-                self.task_queue.push(ChunkTask {
-                    chunk_idx: chunk_idx as u32,
-                    state,
-                    priority,
-                    deadline_frame: self.frame + 4,
-                });
-            }
-        }
-    }
-
-    /// Get next task to execute (respecting budget)
-    pub fn get_next_task(&mut self) -> Option<ChunkTask> {
-        self.task_queue.pop()
-    }
-
-    /// Execute a chunk task
-    pub fn execute_task<T: Copy + Default>(&mut self, task: ChunkTask, page: &mut ColumnarPage<T>) {
-        let dirty_count = page.dirty_tracker.iter_dirty().count();
-        let total_capacity = page.data.len();
-        let mutation_rate = dirty_count as f32 / total_capacity.max(1) as f32;
-
-        // High mutation: use JIT compilation
-        if mutation_rate > self.mutation_threshold {
-            let _func_ptr = self.compiler.fuse_and_compile("dense_task_trace");
-            // In production, would execute func_ptr as machine code
-        } else {
-            // Low mutation: use sparse updates
-            page.process_changed(|_index, _data| {});
-        }
-
-        page.dirty_tracker.clear();
-    }
-
-    /// Update thermal system and prepare next frame
-    pub fn end_frame(&mut self) {
-        self.thermal_system.update_frame();
-        self.frame += 1;
-    }
-
-    /// Get execution stats
-    pub fn get_stats(&self) -> ExecutorStats {
-        ExecutorStats {
-            frame: self.frame,
-            queued_tasks: self.task_queue.len(),
-            thermal_stats: self.thermal_system.get_stats(),
-        }
-    }
-}
-
-/// Execution statistics
-#[derive(Debug, Clone)]
-pub struct ExecutorStats {
-    pub frame: u64,
-    pub queued_tasks: usize,
-    pub thermal_stats: mirage_core::runtime::ThermalStats,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scheduler_creation() {
-        let scheduler = ThermalScheduler::new(1000);
-        assert_eq!(scheduler.frame, 0);
-    }
-
-    #[test]
-    fn chunk_task_ordering() {
-        // WARNING: ChunkTask::Ord has a KNOWN LEGACY BUG documented here.
-        //
-        // The Ord impl uses: other.priority.partial_cmp(&self.priority)
-        // which means task1.cmp(task2) = Less when task1.priority > task2.priority.
-        // In a BinaryHeap (max-heap), "less" items pop last.
-        //
-        // RESULT: BinaryHeap::pop() actually returns the LOWER-priority task first.
-        // This is the OPPOSITE of what is intended.
-        //
-        // TODO(V3-EXECUTOR-PASSIVE): Fix ChunkTask::Ord to use:
-        //   self.priority.partial_cmp(&other.priority)  [without swap]
-        //   wrapped in std::cmp::Reverse<ChunkTask> in the BinaryHeap.
-        // This change requires updating ThermalScheduler::task_queue type.
-        // Safe to fix only after ThermalScheduler is replaced by field-driven scheduling.
-        //
-        // The test below documents the ACTUAL current behavior (even though it is wrong)
-        // so that future refactors do not silently change the behavior without noticing.
-        let task1 = ChunkTask {
-            chunk_idx: 0,
-            state: ChunkState::Hot,
-            priority: 1.0,
-            deadline_frame: 10,
-        };
-        let task2 = ChunkTask {
-            chunk_idx: 1,
-            state: ChunkState::Dormant,
-            priority: 0.0,
-            deadline_frame: 10,
-        };
-
-        // KNOWN BUG: BinaryHeap pops task2 (low priority) before task1 (high priority)
-        // because the Ord is inverted.  Do NOT fix this in isolation without fixing
-        // the entire ThermalScheduler scheduling logic.
-        let mut heap = std::collections::BinaryHeap::new();
-        heap.push(task1);
-        heap.push(task2);
-        let first_popped = heap.pop().unwrap();
-        // DOCUMENTING the bug: dormant task pops first due to inverted Ord.
-        // TODO(V3-EXECUTOR-PASSIVE): This assert must flip to chunk_idx == 0
-        // after fixing the Ord implementation.
-        assert_eq!(
-            first_popped.chunk_idx, 1,
-            "KNOWN BUG: inverted Ord causes low-priority task to pop first from BinaryHeap"
+impl ExecutionRequest {
+    /// Restricted constructor requiring the FrontierExecutionCapability token.
+    #[inline]
+    pub fn new(
+        cell_index: usize,
+        priority: f32,
+        deadline_frame: u64,
+        is_prefetch_hint: bool,
+        captured_probability: f32,
+        capability_mask: u32,
+        target_identity: u32,
+        intent_flags: u32,
+        advisory_hints: Option<u32>,
+        originating_tick: u64,
+        emission_source_id: u32,
+        originating_frontier_generation: u64,
+        deterministic_sequence_index: u64,
+        _cap: &FrontierExecutionCapability,
+    ) -> Self {
+        let request_id = ExecutionRequestId(
+            (originating_tick << 32)
+                | ((emission_source_id as u64) << 24)
+                | (deterministic_sequence_index & 0xFF_FFFF),
         );
+        Self {
+            cell_index,
+            priority,
+            deadline_frame,
+            is_prefetch_hint,
+            captured_probability,
+            capability_mask,
+            target_identity,
+            intent_flags,
+            advisory_hints,
+            originating_tick,
+            emission_source_id,
+            originating_frontier_generation,
+            deterministic_sequence_index,
+            request_id,
+        }
     }
+
+    /// Construct from a SchedulingRequest. Restricted to authorized components.
+    #[inline]
+    pub fn from_scheduling(
+        req: SchedulingRequest,
+        captured_prob: f32,
+        capability_mask: u32,
+        target_identity: u32,
+        intent_flags: u32,
+        advisory_hints: Option<u32>,
+        originating_tick: u64,
+        emission_source_id: u32,
+        originating_frontier_generation: u64,
+        deterministic_sequence_index: u64,
+        _cap: &FrontierExecutionCapability,
+    ) -> Self {
+        let request_id = ExecutionRequestId(
+            (originating_tick << 32)
+                | ((emission_source_id as u64) << 24)
+                | (deterministic_sequence_index & 0xFF_FFFF),
+        );
+        Self {
+            cell_index: req.cell_index,
+            priority: req.priority,
+            deadline_frame: req.deadline_frame,
+            is_prefetch_hint: req.is_prefetch_hint,
+            captured_probability: captured_prob,
+            capability_mask,
+            target_identity,
+            intent_flags,
+            advisory_hints,
+            originating_tick,
+            emission_source_id,
+            originating_frontier_generation,
+            deterministic_sequence_index,
+            request_id,
+        }
+    }
+
+    #[inline] pub fn cell_index(&self) -> usize { self.cell_index }
+    #[inline] pub fn priority(&self) -> f32 { self.priority }
+    #[inline] pub fn deadline_frame(&self) -> u64 { self.deadline_frame }
+    #[inline] pub fn is_prefetch_hint(&self) -> bool { self.is_prefetch_hint }
+    #[inline] pub fn captured_probability(&self) -> f32 { self.captured_probability }
+    #[inline] pub fn capability_mask(&self) -> u32 { self.capability_mask }
+    #[inline] pub fn target_identity(&self) -> u32 { self.target_identity }
+    #[inline] pub fn intent_flags(&self) -> u32 { self.intent_flags }
+    #[inline] pub fn advisory_hints(&self) -> Option<u32> { self.advisory_hints }
+    #[inline] pub fn originating_tick(&self) -> u64 { self.originating_tick }
+    #[inline] pub fn emission_source_id(&self) -> u32 { self.emission_source_id }
+    #[inline] pub fn originating_frontier_generation(&self) -> u64 { self.originating_frontier_generation }
+    #[inline] pub fn deterministic_sequence_index(&self) -> u64 { self.deterministic_sequence_index }
+    #[inline] pub fn request_id(&self) -> ExecutionRequestId { self.request_id }
+
+    #[inline]
+    pub fn is_expired(&self, current_frame: u64) -> bool {
+        current_frame > self.deadline_frame
+    }
+
+    #[inline]
+    pub fn is_stale(&self, current_probability: f32, staleness_threshold: f32) -> bool {
+        self.captured_probability - current_probability > staleness_threshold
+    }
+}
+
+/// A sparse differential execution packet.
+#[derive(Debug, Clone)]
+pub struct DifferentialExecutionPacket {
+    requests: Vec<ExecutionRequest>,
+    tick: u64,
+    frontier_density: usize,
+}
+
+impl DifferentialExecutionPacket {
+    pub fn new(tick: u64, _auth: &ExecutionBridgeAuthority) -> Self {
+        Self {
+            requests: Vec::new(),
+            tick,
+            frontier_density: 0,
+        }
+    }
+
+    #[inline]
+    pub fn push(&mut self, req: ExecutionRequest, _auth: &ExecutionBridgeAuthority) {
+        self.requests.push(req);
+        self.frontier_density = self.requests.len();
+    }
+
+    #[inline] pub fn requests(&self) -> &[ExecutionRequest] { &self.requests }
+    #[inline] pub fn tick(&self) -> u64 { self.tick }
+    #[inline] pub fn frontier_density(&self) -> usize { self.frontier_density }
+    #[inline] pub fn is_empty(&self) -> bool { self.requests.is_empty() }
+    #[inline] pub fn len(&self) -> usize { self.requests.len() }
+}
+
+/// A frontier-local execution batch.
+#[derive(Debug, Clone)]
+pub struct FrontierExecutionBatch {
+    region_id: u32,
+    requests: Vec<ExecutionRequest>,
+    affinity_hint: usize,
+}
+
+impl FrontierExecutionBatch {
+    pub fn new(region_id: u32, affinity_hint: usize, _auth: &ExecutionBridgeAuthority) -> Self {
+        Self {
+            region_id,
+            requests: Vec::new(),
+            affinity_hint,
+        }
+    }
+
+    #[inline]
+    pub fn push(&mut self, req: ExecutionRequest, _auth: &ExecutionBridgeAuthority) {
+        self.requests.push(req);
+    }
+
+    #[inline] pub fn region_id(&self) -> u32 { self.region_id }
+    #[inline] pub fn requests(&self) -> &[ExecutionRequest] { &self.requests }
+    #[inline] pub fn affinity_hint(&self) -> usize { self.affinity_hint }
+    #[inline] pub fn is_empty(&self) -> bool { self.requests.is_empty() }
+    #[inline] pub fn len(&self) -> usize { self.requests.len() }
 }

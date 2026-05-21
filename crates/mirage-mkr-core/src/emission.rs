@@ -112,17 +112,7 @@ pub struct EmissionRequest {
 pub struct EmissionGate {
     /// Reusable scratch buffer — avoids per-tick Vec allocation.
     scratch: Vec<EmissionRequest>,
-
-    /// V3-DIFFERENTIAL: Persistent bitset of cells that were emission-eligible
-    /// last frame and remain eligible this frame.
-    /// These do NOT appear in the delta mask (probability didn't change enough)
-    /// but must still be included in emission output.
-    ///
-    /// One bit per cell; 15625 cells = 245 u64 words = ~2 KB.
-    still_eligible: Vec<u64>,
-
-    /// Number of cells covered by still_eligible.
-    still_eligible_len: usize,
+    pub budget: usize,
 }
 
 impl EmissionGate {
@@ -130,133 +120,37 @@ impl EmissionGate {
     pub fn new() -> Self {
         Self {
             scratch: Vec::with_capacity(MAX_EMIT_PER_TICK * 2),
-            still_eligible: Vec::new(),
-            still_eligible_len: 0,
+            budget: MAX_EMIT_PER_TICK,
         }
     }
 
-    /// Ensure still_eligible bitset covers `num_cells` cells.
-    fn ensure_eligible_capacity(&mut self, num_cells: usize) {
-        if self.still_eligible_len < num_cells {
-            let num_words = (num_cells + 63) / 64;
-            self.still_eligible.resize(num_words, 0u64);
-            self.still_eligible_len = num_cells;
-        }
-    }
-
-    #[inline]
-    fn set_eligible(&mut self, idx: usize) {
-        self.still_eligible[idx / 64] |= 1u64 << (idx % 64);
-    }
-
-    #[inline]
-    fn clear_eligible(&mut self, idx: usize) {
-        self.still_eligible[idx / 64] &= !(1u64 << (idx % 64));
-    }
-
-    /// Internal helper: check if a cell idx is in the still-eligible bitset.
-    #[allow(dead_code)] // Used by collect_from_changed(); retained for sparse path.
-    #[inline]
-    fn is_eligible(&self, idx: usize) -> bool {
-        idx / 64 < self.still_eligible.len()
-            && self.still_eligible[idx / 64] & (1u64 << (idx % 64)) != 0
-    }
-
-    /// Scan the field and return a bounded slice of emission requests.
-    ///
-    /// Full-field O(N) scan.  This is the current default path.
-    ///
-    /// TODO(V3-DIFFERENTIAL): Once `collect_from_changed()` is validated
-    /// for 1000 stable ticks, replace this call in MKRWorld::tick()
-    /// with `collect_from_changed()`.
-    pub fn collect<'a>(&'a mut self, field: &ActivationField) -> &'a [EmissionRequest] {
-        self.scratch.clear();
-        self.ensure_eligible_capacity(field.cells.len());
-
-        for (idx, cell) in field.cells.iter().enumerate() {
-            if cell.execution_probability > EMIT_GATE {
-                self.scratch.push(EmissionRequest {
-                    cell_index:  idx,
-                    probability: cell.execution_probability,
-                });
-                self.set_eligible(idx);
-            } else {
-                self.clear_eligible(idx);
-            }
-        }
-
-        let budget = MAX_EMIT_PER_TICK.min(self.scratch.len());
-        if self.scratch.len() > budget {
-            self.scratch.select_nth_unstable_by(budget - 1, |a, b| {
-                b.probability.partial_cmp(&a.probability).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            self.scratch.truncate(budget);
-        }
-
-        &self.scratch[..budget]
-    }
-
-    /// Sparse emission scan: only evaluates cells that changed OR were already eligible.
-    ///
-    /// **V3-DIFFERENTIAL path** — O(|changed| + |still_eligible|) instead of O(N).
-    ///
-    /// # Correctness
-    /// A cell must be emitted if:
-    ///   (a) It appears in `delta_mask` AND its current probability > EMIT_GATE, OR
-    ///   (b) It was eligible last frame (still_eligible bit set) — it didn't
-    ///       change but is still above the gate.
-    ///
-    /// TODO(V3-DIFFERENTIAL): Replace `collect()` in MKRWorld::tick() with
-    /// this method after 1000-tick validation against collect() output.
-    pub fn collect_from_changed<'a>(
+    /// Frontier-native emission scan: only evaluates cells in the propagation frontier.
+    pub fn collect_from_frontier<'a>(
         &'a mut self,
-        field:      &ActivationField,
-        delta_mask: &crate::activation::delta::FieldDeltaMask,
+        field: &ActivationField,
+        frontier: &crate::activation::frontier::PropagationFrontier,
     ) -> &'a [EmissionRequest] {
         self.scratch.clear();
-        self.ensure_eligible_capacity(field.cells.len());
 
-        // Pass 1: scan changed cells (they may have crossed the gate this frame)
-        for idx in delta_mask.iter_changed() {
-            if idx >= field.cells.len() { break; }
+        // Scan cells in the frontier
+        for &idx in frontier.iter_cells() {
+            if idx >= field.cells.len() { continue; }
             let p = field.cells[idx].execution_probability;
             if p > EMIT_GATE {
                 self.scratch.push(EmissionRequest { cell_index: idx, probability: p });
-                self.set_eligible(idx);
-            } else {
-                self.clear_eligible(idx);
             }
         }
 
-        // Pass 2: scan still-eligible cells (were above gate last frame, unchanged)
-        // These don't appear in the delta mask but must still be emitted.
-        for word_idx in 0..self.still_eligible.len() {
-            let mut word = self.still_eligible[word_idx];
-            while word != 0 {
-                let bit = word.trailing_zeros() as usize;
-                let idx = word_idx * 64 + bit;
-                word &= word - 1; // clear lowest set bit
-                if idx >= field.cells.len() { break; }
-                // Skip cells already processed in Pass 1
-                if delta_mask.is_changed(idx) { continue; }
-                let p = field.cells[idx].execution_probability;
-                if p > EMIT_GATE {
-                    self.scratch.push(EmissionRequest { cell_index: idx, probability: p });
-                } else {
-                    // No longer eligible — clear the bit
-                    self.still_eligible[word_idx] &= !(1u64 << bit);
-                }
-            }
-        }
+        // Budget enforcement & deterministic sorting
+        // Sort by probability (descending), and use cell_index (ascending) as a stable tie-breaker.
+        self.scratch.sort_by(|a, b| {
+            b.probability.partial_cmp(&a.probability)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.cell_index.cmp(&b.cell_index))
+        });
 
-        // Budget enforcement
-        let budget = MAX_EMIT_PER_TICK.min(self.scratch.len());
-        if self.scratch.len() > budget {
-            self.scratch.select_nth_unstable_by(budget - 1, |a, b| {
-                b.probability.partial_cmp(&a.probability).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            self.scratch.truncate(budget);
-        }
+        let budget = self.budget.min(self.scratch.len());
+        self.scratch.truncate(budget);
 
         &self.scratch[..budget]
     }
@@ -280,6 +174,18 @@ impl Default for EmissionGate {
 mod tests {
     use super::*;
     use crate::activation::field::ActivationField;
+    use crate::activation::frontier::PropagationFrontier;
+    use crate::activation::delta::FieldDeltaMask;
+
+    fn full_frontier(width: usize, height: usize) -> PropagationFrontier {
+        let mut f = PropagationFrontier::new(width, height);
+        let mut delta = FieldDeltaMask::new(width * height);
+        for i in 0..(width * height) {
+            delta.set(i);
+        }
+        f.build_from_delta(&delta, width, height);
+        f
+    }
 
     fn field_with_probability(width: usize, height: usize, prob: f32) -> ActivationField {
         let mut f = ActivationField::new(width, height);
@@ -292,8 +198,9 @@ mod tests {
     #[test]
     fn dormant_field_emits_nothing() {
         let field = field_with_probability(8, 8, 0.0);
+        let frontier = full_frontier(8, 8);
         let mut gate = EmissionGate::new();
-        let requests = gate.collect(&field);
+        let requests = gate.collect_from_frontier(&field, &frontier);
         assert_eq!(requests.len(), 0, "dormant field should produce no emission requests");
     }
 
@@ -301,8 +208,9 @@ mod tests {
     fn hot_field_emits_up_to_budget() {
         // 16×16 = 256 cells, all at probability 1.0
         let field = field_with_probability(16, 16, 1.0);
+        let frontier = full_frontier(16, 16);
         let mut gate = EmissionGate::new();
-        let requests = gate.collect(&field);
+        let requests = gate.collect_from_frontier(&field, &frontier);
         assert!(requests.len() <= MAX_EMIT_PER_TICK,
             "emission must not exceed budget: got {}", requests.len());
         assert_eq!(requests.len(), MAX_EMIT_PER_TICK,
@@ -312,20 +220,22 @@ mod tests {
     #[test]
     fn gate_filters_below_threshold() {
         let field = field_with_probability(4, 4, EMIT_GATE - 0.001);
+        let frontier = full_frontier(4, 4);
         let mut gate = EmissionGate::new();
-        let requests = gate.collect(&field);
+        let requests = gate.collect_from_frontier(&field, &frontier);
         assert_eq!(requests.len(), 0, "cells below gate must not be emitted");
     }
 
     #[test]
     fn emission_requests_are_probability_ordered() {
         let mut field = ActivationField::new(4, 4);
+        let frontier = full_frontier(4, 4);
         // Set alternating probabilities
         for (i, cell) in field.cells.iter_mut().enumerate() {
             cell.execution_probability = if i % 2 == 0 { 0.9 } else { 0.1 };
         }
         let mut gate = EmissionGate::new();
-        let requests = gate.collect(&field);
+        let requests = gate.collect_from_frontier(&field, &frontier);
         // All returned cells should have probability > EMIT_GATE
         for r in requests {
             assert!(r.probability > EMIT_GATE,
@@ -337,10 +247,11 @@ mod tests {
     #[test]
     fn cell_index_matches_field_position() {
         let mut field = ActivationField::new(4, 4);
+        let frontier = full_frontier(4, 4);
         // Only cell 5 is hot
         field.cells[5].execution_probability = 1.0;
         let mut gate = EmissionGate::new();
-        let requests = gate.collect(&field);
+        let requests = gate.collect_from_frontier(&field, &frontier);
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].cell_index, 5);
     }

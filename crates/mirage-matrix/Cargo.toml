@@ -11,3 +11,5 @@ uuid = { version = "1.0", features = ["v4"] }
 fxhash = "0.2"
 mirage-matrix-macros = { path = "../mirage-matrix-macros" }
 bytemuck = "1.25.0"
+mirage-mts = { path = "../mirage-mts" }
+

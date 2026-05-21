@@ -1,0 +1,15 @@
+[package]
+name = "mirage-cek"
+version = "0.1.0"
+edition = "2021"
+
+# CEK = Control-Environment-Kontinuation Virtual Machine Substrate
+# Provides the resumable-computation primitives for the MKR kernel.
+# Intentionally has NO dependency on mirage-mkr-core to prevent
+# circular dependencies. Field types are abstracted via CekEvalField.
+
+[lib]
+doctest = false
+
+[dependencies]
+mirage-executor = { path = "../mirage-executor" }

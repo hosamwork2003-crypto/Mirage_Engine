@@ -68,6 +68,7 @@ pub const FRONTIER_MAX_CELLS: usize = 4096;
 ///     // Fall back to full propagation
 /// }
 /// ```
+#[derive(Debug, Clone)]
 pub struct PropagationFrontier {
     /// Bit-mask: one bit per cell, 1 = cell is in the frontier.
     bits: Vec<u64>,
@@ -186,6 +187,15 @@ impl PropagationFrontier {
     /// True if the frontier is empty (no propagation needed this tick).
     #[inline]
     pub fn is_empty(&self) -> bool { self.cells.is_empty() }
+
+    /// Check if a cell index is present in the frontier.
+    #[inline]
+    pub fn contains(&self, idx: usize) -> bool {
+        if idx >= self.num_cells { return false; }
+        let word = idx / 64;
+        let bit  = idx % 64;
+        (self.bits[word] & (1u64 << bit)) != 0
+    }
 }
 
 // =====================================================================

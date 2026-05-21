@@ -40,6 +40,8 @@ pub struct ChunkListHeader {
     pub count: u32,
 }
 
+#[allow(dead_code)]
+
 pub struct MirageRenderer {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,

@@ -2,6 +2,39 @@
 // mirage-mkr-core/src/bridge/renderer_bridge.rs
 // PURPOSE: Field-to-Renderer Translation Layer
 //
+// ===================================================================
+// AUTHORITY BOUNDARY DECLARATION (V4 Stabilization Pass — Task 6)
+// ===================================================================
+//
+// RENDERER AUTHORITY:
+//   RendererBridge is PASSIVE VISUALIZATION ONLY.
+//   It translates ActivationField probabilities into discrete
+//   ChunkState values for the legacy renderer compat path.
+//   It does NOT:
+//     * make execution eligibility decisions
+//     * write to the activation field
+//     * own streaming authority
+//     * own residency authority
+//     * schedule fibers
+//     * interact with OASIS directly
+//     * perform any MKR-authority operations
+//
+// TODO(V4-RENDERER-PASSIVE): RendererBridge is the SOLE bridge
+// permitted to write ChunkState to RuntimeDirectory.
+// ExecutionBridge and ExecutionRequest MUST NOT write to RuntimeDirectory.
+// Verified: ExecutionBridge currently clean. Maintain this invariant.
+//
+// TODO(V4-RENDERER-PASSIVE): When the GPU shader is updated to consume
+// `execution_probability` as a raw f32 buffer, `apply_to_directory()`
+// becomes obsolete. Remove it only AFTER the shader is updated AND
+// the RendererBridge parity validator confirms stable parity for
+// 10,000+ ticks.
+//
+// TODO(V4-OASIS-AUTHORITY): OASIS residency (Resident/Predictive/Dormant)
+// is NOT driven by RendererBridge. RendererBridge merely mirrors field
+// state for the legacy renderer. OASIS residency authority is
+// completely separate from renderer state. Do NOT conflate these.
+//
 // PROBLEM:
 // The legacy renderer (mirage-renderer/src/main.rs) reads discrete
 // `ChunkState` values from `RuntimeDirectory::chunk_runtime_states`
@@ -39,10 +72,11 @@
 // execution_probability for use in shaders that are already updated to
 // handle continuous values (future work).
 //
-// TODO(V3): Once the renderer GPU shader is updated to consume
-// execution_probability as a raw f32 buffer, remove
+// TODO(V4-RENDERER-PASSIVE): Once the renderer GPU shader is updated to
+// consume execution_probability as a raw f32 buffer, remove
 // `apply_to_directory()` and feed `render_state_scalars()` directly
-// to `renderer.update_states_buffer()`.
+// to `renderer.update_states_buffer()`. OASIS is not involved in this
+// transition — renderer reads field directly, OASIS reads residency.
 // ===================================================================
 
 use mirage_core::pool::RuntimeDirectory;
@@ -78,6 +112,37 @@ pub const BRIDGE_PREDICTIVE_THRESHOLD: f32 = 0.05;
 pub struct RendererBridge;
 
 impl RendererBridge {
+
+
+        /// Apply renderer translation ONLY to changed cells.
+    ///
+    /// V4 — Pass 04:
+    /// Differential renderer bridge path.
+    ///
+    /// Instead of translating the entire activation field every frame,
+    /// this updates only cells marked changed in the FieldDeltaMask.
+    ///
+    /// AUTHORITATIVE STATUS:
+    /// Shadow-only until renderer parity validation proves stable.
+    ///
+    /// TODO(V4-PASS06):
+    /// Promote this path to authority after long-term parity success.
+pub fn apply_changed_cells(
+    &self,
+    field: &ActivationField,
+    delta_mask: &crate::activation::delta::FieldDeltaMask,
+    directory: &mut RuntimeDirectory,
+) {
+    for index in delta_mask.iter_changed() {
+        let probability =
+            field.cells[index].execution_probability;
+
+        directory.chunk_runtime_states[index] =
+            probability_to_chunk_state(probability);
+    }
+}
+
+
     pub fn new() -> Self { Self }
 
     // ------------------------------------------------------------------
@@ -142,24 +207,6 @@ impl RendererBridge {
     /// # TODO(V3-SPARSE-VALIDATION): Run apply_changed_cells() in parallel
     /// with apply_to_directory() for 1000 ticks.  Assert that all cells in
     /// the changed set produce identical ChunkStates in both paths.
-    pub fn apply_changed_cells(
-        &self,
-        field:      &ActivationField,
-        directory:  &mut RuntimeDirectory,
-        delta_mask: &crate::activation::delta::FieldDeltaMask,
-    ) {
-        debug_assert_eq!(
-            field.len(),
-            directory.chunk_runtime_states.len(),
-            "RendererBridge: field and directory size mismatch"
-        );
-
-        for idx in delta_mask.iter_changed() {
-            if idx >= field.cells.len() { break; }
-            directory.chunk_runtime_states[idx] =
-                probability_to_chunk_state(field.cells[idx].execution_probability);
-        }
-    }
 
     /// Sparse probability buffer update: only writes changed cell probabilities.
     ///
@@ -336,4 +383,49 @@ mod tests {
         assert!( b.is_emission_eligible(0.1));
         assert!(!b.is_emission_eligible(0.01));
     }
+
+ #[test]
+fn apply_changed_cells_updates_only_delta_cells() {
+    use crate::activation::ActivationField;
+    use crate::activation::delta::FieldDeltaMask;
+    use mirage_core::pool::RuntimeDirectory;
+    use mirage_core::runtime::ChunkState;
+
+    let bridge = RendererBridge::new();
+
+    let mut field = ActivationField::new(4, 4);
+    let mut directory = RuntimeDirectory::new(16);
+
+    // كله Dormant بالبداية
+    for state in directory.chunk_runtime_states.iter_mut() {
+        *state = ChunkState::Dormant;
+    }
+
+    // خلية واحدة فقط هتتغير
+    field.cells[5].execution_probability = 1.0;
+
+    let mut delta = FieldDeltaMask::new(16);
+    delta.mark_changed(5);
+
+    bridge.apply_changed_cells(
+        &field,
+        &delta,
+        &mut directory,
+    );
+
+    // الخلية المتغيرة لازم تبقى non-dormant
+    assert_ne!(
+        directory.chunk_runtime_states[5],
+        ChunkState::Dormant,
+    );
+
+    // أي خلية تانية لازم تفضل Dormant
+    for (i, state) in
+        directory.chunk_runtime_states.iter().enumerate()
+    {
+        if i != 5 {
+            assert_eq!(*state, ChunkState::Dormant);
+        }
+    }
+}
 }

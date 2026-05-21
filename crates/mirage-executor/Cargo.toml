@@ -10,3 +10,4 @@ mirage-compiler = { path = "../mirage-compiler" }
 mirage-math = { path = "../mirage-math" }
 mirage-core = { path = "../mirage-core" }
 rayon = "1.8"
+crossbeam-deque = "0.8"

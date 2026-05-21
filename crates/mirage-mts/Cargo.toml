@@ -1,0 +1,15 @@
+[package]
+name = "mirage-mts"
+version = "0.1.0"
+edition = "2021"
+
+# MTS = Metamorphic Topology Substrate
+# Provides the topology graph API and influence-scalar interface
+# consumed by the MKR core activation solver.
+
+[lib]
+doctest = false
+
+[dependencies]
+mirage-core = { path = "../mirage-core" }
+mirage-morphogenic = { path = "../mirage-morphogenic" }

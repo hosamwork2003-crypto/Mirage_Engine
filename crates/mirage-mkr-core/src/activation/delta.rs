@@ -47,7 +47,7 @@ pub const ACTIVATION_EPSILON: f32 = 1e-4;
 pub const PROBABILITY_EPSILON: f32 = 1e-4;
 
 /// Minimum change in `pressure` to flag a pressure shift.
-pub const PRESSURE_EPSILON: f32 = 5e-4;
+pub const PRESSURE_EPSILON: f32 = 5e-2;
 
 // =====================================================================
 // CELL CHANGE FLAGS
@@ -166,6 +166,41 @@ pub struct FieldDeltaMask {
 }
 
 impl FieldDeltaMask {
+
+    pub fn mark_changed(&mut self, index: usize) {
+    let word = index / 64;
+
+    if word >= self.words.len() {
+        return;
+    }
+
+    let bit = index % 64;
+    let mask = 1u64 << bit;
+
+    if (self.words[word] & mask) == 0 {
+        self.words[word] |= mask;
+        self.changed_count += 1;
+    }
+}
+
+        /// Mark a cell as changed.
+    #[inline]
+    pub fn mark(&mut self, idx: usize) {
+        let word = idx / 64;
+        let bit  = idx % 64;
+
+        if word >= self.words.len() {
+            return;
+        }
+
+        let mask = 1u64 << bit;
+
+        if (self.words[word] & mask) == 0 {
+            self.words[word] |= mask;
+            self.changed_count += 1;
+        }
+    }
+
     /// Allocate a zeroed mask for `num_cells` cells.
     pub fn new(num_cells: usize) -> Self {
         let num_words = (num_cells + 63) / 64;
