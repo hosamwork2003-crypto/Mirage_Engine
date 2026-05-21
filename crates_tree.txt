@@ -34,10 +34,14 @@
 │   ├── src
 │   │   ├── archetype.rs
 │   │   ├── continuation.rs
+│   │   ├── contracts.rs
+│   │   ├── governance.rs
+│   │   ├── invariants.rs
 │   │   ├── lib.rs
 │   │   ├── oasis.rs
 │   │   ├── pool.rs
-│   │   └── runtime.rs
+│   │   ├── runtime.rs
+│   │   └── validation.rs
 │   └── Cargo.toml
 ├── mirage-executor
 │   ├── src
@@ -101,16 +105,30 @@
 │   │   ├── streaming
 │   │   │   └── mod.rs
 │   │   ├── emission.rs
-│   │   ├── emission_validation.rs
 │   │   ├── lib.rs
 │   │   ├── main.rs
 │   │   ├── protocol.rs
 │   │   ├── regions.rs
 │   │   └── region_validation.rs
 │   └── Cargo.toml
+├── mirage-morphogenic
+│   ├── src
+│   │   ├── continuity.rs
+│   │   ├── diff.rs
+│   │   ├── lib.rs
+│   │   ├── persistence.rs
+│   │   ├── propagation.rs
+│   │   ├── reinforcement.rs
+│   │   ├── replay.rs
+│   │   └── state.rs
+│   └── Cargo.toml
 ├── mirage-mts
 │   ├── src
-│   │   └── lib.rs
+│   │   ├── bridge.rs
+│   │   ├── lib.rs
+│   │   ├── morphogenic.rs
+│   │   ├── propagation.rs
+│   │   └── topology.rs
 │   └── Cargo.toml
 ├── mirage-net
 │   ├── src

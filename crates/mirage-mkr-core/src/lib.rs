@@ -1,5 +1,28 @@
 // ===================================================================
-// mirage-mkr-core/src/lib.rs  (V3/V4 — Substrate Core Library)
+// mirage-mkr-core/src/lib.rs
+// PURPOSE: Metamorphic Kernel Core (MKR Core) — V6
+//
+// V6 OWNERSHIP DECLARATION:
+// ---------------------------------------------------------------
+// mirage-mkr-core is the SOLE owner of the runtime orchestration,
+// canonical runtime pipeline, deterministic frame execution, and
+// runtime realization passes.
+//
+// OWNS:
+//   * runtime_pipeline           — canonical runtime pipeline phase sequence
+//   * runtime_realizer           — sole runtime realization authority
+//   * MKRWorld & solver passes   — kernel runtime execution
+//
+// MUST NOT OWN:
+//   * topology authority         — owned by mirage-mts
+//   * continuity / emergence     — owned by mirage-morphogenic
+//
+// DETERMINISTIC & REPLAY GUARANTEES:
+//   * Compiles-time defined, fixed-order 9-phase execution.
+//   * No async, thread spawning, or task graphs in the core pipeline.
+//   * Strict Numerical Determinism: Float canonicalization and Kahan summation ensure cross-platform consistency.
+//   * Byte-Replay Exactness: Strict byte serialization and FNV-1a verification seals frames at each tick.
+//   * Drift Detection: Validates execution signatures against expected platform signatures to block drift.
 // ===================================================================
 
 pub mod activation;
@@ -10,6 +33,26 @@ pub mod emission;
 pub mod protocol;
 pub mod regions;
 pub mod region_validation;
+pub mod runtime_pipeline;
+pub mod runtime_realizer;
+
+pub mod region_identity;
+pub mod region_graph;
+pub mod region_runtime;
+pub mod streaming_pipeline;
+pub mod residency_runtime;
+pub mod world_runtime;
+
+
+pub use mirage_core::platform_drift::RuntimeDeterminismSeal;
+
+pub use region_identity::{StructuralRegionId, StructuralRegionGeneration, RegionRuntimeIdentity};
+pub use region_graph::{StructuralRegionNode, StructuralRegionEdge, RegionTransitionDescriptor, StructuralRegionGraph};
+pub use region_runtime::{RegionActivationState, RegionResidencyState, RegionStreamingState, StructuralRegionRuntime};
+pub use streaming_pipeline::{StructuralStreamingDescriptor, StructuralStreamingSequence, StreamingPhase};
+pub use residency_runtime::{StructuralResidencyDescriptor, StructuralResidencySequence, ResidencyStabilizationState};
+pub use world_runtime::{StructuralWorldRuntime, WorldRuntimePhase, WorldRuntimeSequence};
+
 
 // ===================================================================
 // IMPORTS

@@ -57,6 +57,23 @@ impl Default for StructuralState {
     }
 }
 
+/// Deterministic structural pressure metadata for stabilization and persistence.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StructuralPressureState {
+    pub stabilization_pressure: f32,
+    pub reinforcement_pressure: f32,
+    pub continuity_pressure: f32,
+}
+
+impl StructuralPressureState {
+    /// Clamp to [0.0, 1.0]
+    pub fn normalize(&mut self) {
+        self.stabilization_pressure = self.stabilization_pressure.clamp(0.0, 1.0);
+        self.reinforcement_pressure = self.reinforcement_pressure.clamp(0.0, 1.0);
+        self.continuity_pressure = self.continuity_pressure.clamp(0.0, 1.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

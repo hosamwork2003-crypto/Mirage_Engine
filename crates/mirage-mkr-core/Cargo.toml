@@ -4,23 +4,21 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# V3 activation layer has no external std-external dependencies.
-
-# COMPAT: mirage-core provides ThermalSystem compatibility bridge.
-# TODO(V3-COMPAT): Remove once all downstream crates read ActivationField.
+# mirage-core provides ThermalSystem compat bridge and runtime primitives.
 mirage-core = { path = "../mirage-core" }
 
-# mirage-matrix provides TopologyGraph (activation influence graph).
-# Used by MKRWorld to wire topology influence into the activation field tick.
-mirage-matrix = { path = "../mirage-matrix" }
+# V5.5: mirage-mts is the SOLE topology owner. TopologyGraph, ExecutionLane, etc.
+# are imported via mirage_mts::topology::* — NOT via mirage-matrix.
+# mirage-matrix was removed (V5.5 cleanup): audit confirmed zero direct uses.
+mirage-mts      = { path = "../mirage-mts" }
 
 mirage-compute = { path = "../mirage-compute" }
 mirage-executor = { path = "../mirage-executor" }
 mirage-query    = { path = "../mirage-query" }
-mirage-mts      = { path = "../mirage-mts" }
 mirage-cek      = { path = "../mirage-cek" }
 mirage-synapse  = { path = "../mirage-synapse" }
 mirage-morphogenic = { path = "../mirage-morphogenic" }
+mirage-math = { path = "../mirage-math" }
 rayon = "1.8"
 
 # serde for Handle type in pool/handle.rs
@@ -28,4 +26,3 @@ serde = { version = "1.0", features = ["derive"] }
 
 [lib]
 doctest = false
-

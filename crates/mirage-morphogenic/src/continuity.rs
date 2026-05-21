@@ -3,20 +3,65 @@
 
 pub type ContinuityEpoch = u64;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotIdentity {
+    pub continuity_epoch: u64,
+    pub originating_tick: u64,
+    pub realization_sequence_index: u64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContinuitySnapshot {
     pub epoch: ContinuityEpoch,
+    /// Deterministic realization sequence index (provenance)
+    pub realization_sequence_index: u64,
+    /// Originating tick of the snapshot (provenance)
+    pub originating_tick: u64,
+    /// Snapshot identity (immutable provenance bundle)
+    pub snapshot_identity: SnapshotIdentity,
     /// Immutable snapshot payload (public for replay/audit; produced/consumed by deterministic appliers)
     pub continuity: Vec<f32>,
 }
 
 impl ContinuitySnapshot {
+    /// Create a snapshot with default provenance (zeros).
     pub fn new(epoch: ContinuityEpoch, continuity: Vec<f32>) -> Self {
         let mut c = continuity;
         for v in &mut c {
             *v = v.clamp(0.0, 1.0);
         }
-        Self { epoch, continuity: c }
+        let realization_sequence_index = 0;
+        let originating_tick = 0;
+        Self {
+            epoch,
+            realization_sequence_index,
+            originating_tick,
+            snapshot_identity: SnapshotIdentity {
+                continuity_epoch: epoch,
+                originating_tick,
+                realization_sequence_index,
+            },
+            continuity: c,
+        }
+    }
+
+    /// Create a snapshot with explicit provenance.
+    pub fn with_provenance(epoch: ContinuityEpoch, realization_sequence_index: u64, originating_tick: u64, continuity: Vec<f32>) -> Self {
+        let mut c = continuity;
+        for v in &mut c {
+            *v = v.clamp(0.0, 1.0);
+        }
+        Self {
+            epoch,
+            realization_sequence_index,
+            originating_tick,
+            snapshot_identity: SnapshotIdentity {
+                continuity_epoch: epoch,
+                originating_tick,
+                realization_sequence_index,
+            },
+            continuity: c,
+        }
     }
 
     #[inline]
@@ -24,6 +69,49 @@ impl ContinuitySnapshot {
 
     #[inline]
     pub fn get(&self, idx: usize) -> Option<f32> { self.continuity.get(idx).copied() }
+
+    /// Obtain a copy of the snapshot identity.
+    pub fn identity(&self) -> SnapshotIdentity { self.snapshot_identity.clone() }
+}
+
+/// Deterministic lifecycle metadata for managed continuity snapshots.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContinuityLifecycleState {
+    pub created_epoch: ContinuityEpoch,
+    pub last_realized_epoch: ContinuityEpoch,
+    pub realization_count: u64,
+    pub continuity_version: u64,
+}
+
+/// Managed continuity snapshot pairs a snapshot with deterministic lifecycle metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManagedContinuitySnapshot {
+    pub lifecycle: ContinuityLifecycleState,
+    pub snapshot: ContinuitySnapshot,
+}
+
+impl ManagedContinuitySnapshot {
+    pub fn new(created_epoch: ContinuityEpoch, snapshot: ContinuitySnapshot) -> Self {
+        Self {
+            lifecycle: ContinuityLifecycleState {
+                created_epoch,
+                last_realized_epoch: snapshot.epoch,
+                realization_count: 1,
+                continuity_version: 0,
+            },
+            snapshot,
+        }
+    }
+
+    /// Advance to the next snapshot, returning a new ManagedContinuitySnapshot.
+    /// Deterministic: increments counters, updates epoch, never mutates self.
+    pub fn advance(&self, next_snapshot: ContinuitySnapshot) -> Self {
+        let mut lifecycle = self.lifecycle.clone();
+        lifecycle.realization_count = lifecycle.realization_count.saturating_add(1);
+        lifecycle.continuity_version = lifecycle.continuity_version.saturating_add(1);
+        lifecycle.last_realized_epoch = next_snapshot.epoch;
+        Self { lifecycle, snapshot: next_snapshot }
+    }
 }
 
 /// Private runtime continuity field. Direct access to the internal Vec is not allowed.
@@ -55,9 +143,14 @@ impl StructuralContinuityField {
         }
     }
 
-    /// Produce an immutable snapshot (deterministic copy).
+    /// Produce an immutable snapshot (deterministic copy) with default provenance.
     pub fn snapshot(&self, epoch: ContinuityEpoch) -> ContinuitySnapshot {
         ContinuitySnapshot::new(epoch, self.continuity.clone())
+    }
+
+    /// Produce an immutable snapshot including provenance fields.
+    pub fn snapshot_with_provenance(&self, epoch: ContinuityEpoch, realization_sequence_index: u64, originating_tick: u64) -> ContinuitySnapshot {
+        ContinuitySnapshot::with_provenance(epoch, realization_sequence_index, originating_tick, self.continuity.clone())
     }
 
     /// Replace current continuity with a snapshot (deterministic).
@@ -127,5 +220,20 @@ mod tests {
         f.set(2, 0.0);
         f.smoothing_pass();
         assert!((f.get(0).unwrap() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn continuity_lifecycle_advancement_replay_safe() {
+        let mut field = StructuralContinuityField::new(3);
+        field.set(0, 0.5);
+        let snap0 = field.snapshot(10);
+        let managed = ManagedContinuitySnapshot::new(10, snap0.clone());
+        let mut field2 = StructuralContinuityField::new(3);
+        field2.set(0, 0.8);
+        let snap1 = field2.snapshot(11);
+        let managed2 = managed.advance(snap1.clone());
+        assert_eq!(managed2.lifecycle.realization_count, managed.lifecycle.realization_count + 1);
+        assert_eq!(managed2.lifecycle.last_realized_epoch, snap1.epoch);
+        assert_eq!(managed2.lifecycle.continuity_version, managed.lifecycle.continuity_version + 1);
     }
 }

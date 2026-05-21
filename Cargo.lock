@@ -1661,7 +1661,7 @@ dependencies = [
  "mirage-compute",
  "mirage-core",
  "mirage-executor",
- "mirage-matrix",
+ "mirage-math",
  "mirage-morphogenic",
  "mirage-mts",
  "mirage-query",

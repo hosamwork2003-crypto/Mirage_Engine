@@ -3,9 +3,12 @@ use std::sync::Arc;
 
 pub mod residency;
 pub mod gpu_driven;
+pub mod residency_state;
 
 pub use gpu_driven::GpuDriven;
 pub use residency::{ResidencyTracker, ResidencyState};
+pub use residency_state::{RendererResidencyState, ResidencyClassification, ResidencySnapshot};
+
 
 pub const CHUNK_SIZE: usize = 64;
 pub const NUM_CHUNKS: u32 = 15625;

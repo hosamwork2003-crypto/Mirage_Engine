@@ -1,39 +1,42 @@
 // ===================================================================
 // mirage-mts/src/lib.rs
-// PURPOSE: Metamorphic Topology Substrate (MTS) — Public API Layer
+// PURPOSE: Metamorphic Topology Substrate (MTS) — V6 Public API
 //
-// ARCHITECTURAL ROLE
+// V6 OWNERSHIP DECLARATION:
 // ---------------------------------------------------------------
-// MTS sits between the raw topology data model (mirage-matrix) and
-// the MKR core activation solver (mirage-mkr-core). It:
+// mirage-mts is the SOLE authoritative owner of the topology runtime.
 //
-//   1. Re-exports the authoritative TopologyGraph and related types
-//      from mirage-matrix under a stable MTS namespace.
+// OWNS:
+//   * TopologyGraph               — activation influence graph
+//   * TopologyNode                — chunk-level topology node
+//   * ExecutionLane               — processing domain tag
+//   * AlignmentResult             — topology-field alignment check
+//   * TopologyInfluenceProvider   — trait contract for activation solver
+//   * InfluenceCache              — zero-alloc per-tick scratchpad
+//   * propagation bridge          — deterministic, read-only extraction
+//   * compute_propagation()       — deterministic grid propagation utility
+//   * governance                  — pure deterministic topology validators
 //
-//   2. Defines the TopologyInfluenceProvider trait — the primary
-//      contract the activation solver depends on. Any type that
-//      can supply a flat &[f32] influence scalar slice per cell
-//      satisfies this trait.
+// MUST NOT:
+//   * own orchestration / runtime execution — owned by mirage-mkr-core
+//   * own continuity / emergence           — owned by mirage-morphogenic
+//   * own runtime execution authority      — owned by mirage-mkr-core
 //
-//   3. Provides an InfluenceCache scratchpad that minimizes
-//      per-tick allocation when the solver queries influence scalars.
-//
-// DEPENDENCY DIRECTION
-// ---------------------------------------------------------------
-//   mirage-matrix (data model)
-//       ↓
-//   mirage-mts    (topology API + trait contracts)
-//       ↓
-//   mirage-mkr-core (consumes TopologyInfluenceProvider)
-//
-// NO CIRCULAR DEPENDENCIES. mirage-mts does NOT depend on
-// mirage-mkr-core or any activation-field types.
+// DETERMINISTIC & REPLAY GUARANTEES:
+//   * influence_scalars()  — pure function, same input → same output
+//   * topology traversal   — index-ordered, no hash-map dependence
+//   * propagation bridge   — lexicographically sorted edge pairs
+//   * lane IDs             — deterministic u64 from (from, to) indices
+//   * governance validators — pure, primitive-only, no side effects
 // ===================================================================
 
-// Topology implementation is owned here (moved from mirage-matrix).
+// Topology implementation is owned exclusively here.
 pub mod topology;
 pub mod propagation;
 pub mod bridge;
+
+// V5.5: Governance validators — pure deterministic topology authority checks.
+pub mod governance;
 
 pub use crate::bridge::build_structural_propagation_sequence;
 
@@ -46,6 +49,16 @@ pub use crate::topology::{
 
 pub use crate::propagation::compute_propagation;
 
+// Re-export governance validators at crate root for ergonomic access.
+pub use crate::governance::{
+    validate_topology_canonical_ownership,
+    validate_topology_node_ordering,
+    validate_lane_ids_stable,
+    validate_propagation_descriptor_order,
+    validate_topology_replay_equivalence,
+    validate_topology_full_consistency,
+};
+
 // =====================================================================
 // TopologyInfluenceProvider — MTS trait contract
 // =====================================================================
@@ -57,10 +70,11 @@ pub use crate::propagation::compute_propagation;
 /// concrete `TopologyGraph` type, enabling alternative implementations
 /// (e.g., sparse graphs, procedural generators, GPU readback buffers).
 ///
-/// # Contract
-/// `fill_influence_scalars(buf)` must write exactly `len()` f32 values
-/// into `buf`, each in the range `[0.0, 1.0]`. Values represent how
-/// strongly the graph topology pulls each cell toward higher activation.
+/// # V5.5 Contract
+/// * `fill_influence_scalars(buf)` must write exactly `len()` f32 values
+///   into `buf`, each in the range `[0.0, 1.0]`.
+/// * Output must be deterministic: same graph state → same scalars.
+/// * Implementations must not depend on allocator or hash order.
 pub trait TopologyInfluenceProvider {
     /// Number of cells this topology covers.
     fn len(&self) -> usize;
@@ -110,6 +124,9 @@ impl TopologyInfluenceProvider for TopologyGraph {
 /// Avoids per-tick heap allocation when the solver queries the topology.
 /// `refresh` fills the cache from any `TopologyInfluenceProvider`;
 /// `as_slice` returns the cached scalar slice.
+///
+/// V5.5: The cache is deterministic — same provider state → same slice.
+/// It never shrinks (amortized allocation, identical to `Vec::resize`).
 pub struct InfluenceCache {
     buf: Vec<f32>,
 }
@@ -122,8 +139,7 @@ impl InfluenceCache {
 
     /// Refresh the cache from a `TopologyInfluenceProvider`.
     ///
-    /// Resizes the buffer if the topology grew. Never shrinks (amortized
-    /// allocation pattern identical to `Vec::resize`).
+    /// Resizes the buffer if the topology grew. Never shrinks.
     pub fn refresh(&mut self, provider: &dyn TopologyInfluenceProvider) {
         let n = provider.len();
         if self.buf.len() != n {
@@ -152,18 +168,48 @@ impl InfluenceCache {
 }
 
 // =====================================================================
-// Tests
+// Tests — V5.5 Deterministic Suite (lib-level: InfluenceCache + Provider)
 // =====================================================================
+// Note: Topology governance tests live in governance.rs (mod governance::tests).
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_node(id: usize, pull: f32) -> TopologyNode {
+        TopologyNode {
+            id,
+            thermal_state: mirage_core::runtime::ChunkState::Dormant,
+            execution_lane: ExecutionLane::Background,
+            dependency_mask: 0,
+            wake_conditions: 0,
+            continuation_targets: vec![],
+            residency_requirement: 0,
+            cost_estimate: 0.0,
+            activation_pull: pull,
+            cache_pressure: 0.0,
+        }
+    }
+
+    fn build_chain_graph(n: usize) -> TopologyGraph {
+        let mut g = TopologyGraph::new();
+        for i in 0..n {
+            g.add_node(make_node(i, (i as f32) / (n as f32).max(1.0)));
+        }
+        for i in 0..n.saturating_sub(1) {
+            g.add_edge(i, i + 1);
+        }
+        g
+    }
+
+    // ----------------------------------------------------------------
+    // TopologyInfluenceProvider trait + InfluenceCache
+    // ----------------------------------------------------------------
 
     #[test]
     fn topology_graph_implements_provider() {
         let topo = TopologyGraph::new();
         let mut cache = InfluenceCache::new(0);
         cache.refresh(&topo);
-        // Empty graph → empty cache
         assert_eq!(cache.len(), 0);
         assert!(cache.is_empty());
     }
@@ -171,18 +217,7 @@ mod tests {
     #[test]
     fn influence_cache_fills_from_graph_with_nodes() {
         let mut topo = TopologyGraph::new();
-        topo.add_node(TopologyNode {
-            id: 0,
-            thermal_state: mirage_core::runtime::ChunkState::Dormant,
-            execution_lane: ExecutionLane::Physics,
-            dependency_mask: 0,
-            wake_conditions: 0,
-            continuation_targets: vec![],
-            residency_requirement: 0,
-            cost_estimate: 1.0,
-            activation_pull: 0.8,
-            cache_pressure: 0.0,
-        });
+        topo.add_node(make_node(0, 0.8));
         let mut cache = InfluenceCache::new(1);
         cache.refresh(&topo);
         assert_eq!(cache.len(), 1);
@@ -192,7 +227,6 @@ mod tests {
 
     #[test]
     fn provider_trait_is_object_safe() {
-        // Verify we can use TopologyInfluenceProvider as a trait object.
         let topo = TopologyGraph::new();
         let provider: &dyn TopologyInfluenceProvider = &topo;
         assert_eq!(provider.len(), 0);
@@ -203,22 +237,109 @@ mod tests {
     fn influence_cache_resize_on_growth() {
         let mut cache = InfluenceCache::new(0);
         let mut topo = TopologyGraph::new();
-        cache.refresh(&topo); // empty
+        cache.refresh(&topo);
         assert_eq!(cache.len(), 0);
 
-        topo.add_node(TopologyNode {
-            id: 0,
-            thermal_state: mirage_core::runtime::ChunkState::Dormant,
-            execution_lane: ExecutionLane::Background,
-            dependency_mask: 0,
-            wake_conditions: 0,
-            continuation_targets: vec![],
-            residency_requirement: 0,
-            cost_estimate: 0.5,
-            activation_pull: 0.5,
-            cache_pressure: 0.0,
-        });
-        cache.refresh(&topo); // must resize to 1
+        topo.add_node(make_node(0, 0.5));
+        cache.refresh(&topo);
         assert_eq!(cache.len(), 1);
+    }
+
+    // ----------------------------------------------------------------
+    // Deterministic traversal — same input → same output
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn influence_scalars_deterministic() {
+        let g = build_chain_graph(8);
+        let s1 = g.influence_scalars();
+        let s2 = g.influence_scalars();
+        assert_eq!(s1.len(), s2.len(), "scalars length must be stable");
+        for (i, (a, b)) in s1.iter().zip(s2.iter()).enumerate() {
+            assert_eq!(a, b,
+                "node {} scalar differs between calls: {} vs {}", i, a, b);
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Replay equivalence — two identical builds → same output
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn replay_equivalence_identical_graphs() {
+        let g1 = build_chain_graph(6);
+        let g2 = build_chain_graph(6);
+        let s1 = g1.influence_scalars();
+        let s2 = g2.influence_scalars();
+        assert_eq!(s1.len(), s2.len());
+        for (i, (a, b)) in s1.iter().zip(s2.iter()).enumerate() {
+            assert_eq!(a, b,
+                "replay: node {} scalar differs: {} vs {}", i, a, b);
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // influence_scalars_into == influence_scalars (ownership isolation)
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn influence_scalars_into_matches_alloc_version() {
+        let g = build_chain_graph(6);
+        let alloc = g.influence_scalars();
+        let mut buf = Vec::new();
+        g.influence_scalars_into(&mut buf);
+        assert_eq!(alloc.len(), buf.len());
+        for (i, (a, b)) in alloc.iter().zip(buf.iter()).enumerate() {
+            let diff = (a - b).abs();
+            assert!(diff < f32::EPSILON,
+                "node {} mismatch: alloc={} into={}", i, a, b);
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Canonical snapshot equality via InfluenceCache
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn canonical_snapshot_equality_via_cache() {
+        let g = build_chain_graph(5);
+        let mut cache1 = InfluenceCache::new(5);
+        let mut cache2 = InfluenceCache::new(5);
+        cache1.refresh(&g);
+        cache2.refresh(&g);
+        assert_eq!(cache1.as_slice(), cache2.as_slice(),
+            "two cache refreshes from same graph must be identical");
+    }
+
+    // ----------------------------------------------------------------
+    // History replay determinism — InfluenceCache stable over multiple refreshes
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn history_replay_determinism_multi_refresh() {
+        let g = build_chain_graph(4);
+        let mut cache = InfluenceCache::new(4);
+        cache.refresh(&g);
+        let snap1: Vec<f32> = cache.as_slice().to_vec();
+        cache.refresh(&g);
+        let snap2: Vec<f32> = cache.as_slice().to_vec();
+        assert_eq!(snap1, snap2,
+            "repeated refresh of unchanged graph must produce identical snapshots");
+    }
+
+    // ----------------------------------------------------------------
+    // Governance re-exports: validators accessible at crate root
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn governance_validators_accessible_at_crate_root() {
+        let g = build_chain_graph(3);
+        assert!(validate_topology_canonical_ownership(&g).is_ok());
+        assert!(validate_topology_node_ordering(&g).is_ok());
+        assert!(validate_lane_ids_stable(&[0u64, 1, 2]).is_ok());
+        assert!(validate_propagation_descriptor_order(&[0u64, 1, 2]).is_ok());
+        let s = g.influence_scalars();
+        assert!(validate_topology_replay_equivalence(&s, &s.clone()).is_ok());
+        assert!(validate_topology_full_consistency(&g).is_ok());
     }
 }

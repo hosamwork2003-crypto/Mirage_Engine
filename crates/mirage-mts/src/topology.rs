@@ -1,39 +1,43 @@
 // ===================================================================
-// mirage-matrix/src/topology.rs
-// PURPOSE: TopologyGraph — Activation Influence Graph (V3)
+// mirage-mts/src/topology.rs
+// PURPOSE: TopologyGraph — Activation Influence Graph (V5.5)
 //
-// V3 ARCHITECTURAL ROLE:
-// In V3, the TopologyGraph is an "activation influence graph" —
-// NOT a state propagation graph.
+// V5.5 OWNERSHIP DECLARATION:
+// This file is the SOLE authoritative owner of the TopologyGraph runtime.
+// No other crate may define, re-implement, or shadow this type.
 //
-// OLD ROLE (V2 / COMPAT):
-// The old TopologyGraph propagated thermal states between nodes by
-// calling ThermalSystem::heat_chunk().  This is a discrete,
-// threshold-driven side-effect model: "if state == Hot, heat neighbors."
+// AUTHORITY BOUNDARY:
+//   OWNS:   TopologyGraph, TopologyNode, ExecutionLane, AlignmentResult
+//   OWNED BY: mirage-mts (Metamorphic Topology Substrate)
+//   FORBIDDEN: mirage-matrix must NOT own topology runtime.
+//             mirage-morphogenic must NOT own topology runtime.
 //
-// NEW ROLE (V3):
-// The TopologyGraph provides a continuous influence_scalars() slice
-// to the ActivationSolver.  Each entry is a f32 in [0.0, 1.0]
-// representing how strongly the graph topology pulls that cell toward
-// higher activation.  There are no enum arms in this path.
+// ARCHITECTURAL ROLE:
+// The TopologyGraph is an "activation influence graph" providing a
+// continuous influence_scalars() slice to the ActivationSolver.
+// Each entry is a f32 in [0.0, 1.0] representing how strongly the
+// graph topology pulls that cell toward higher activation.
 //
-// MIGRATION STATE:
-// - `propagate_thermal()` is COMPAT-ONLY.  It is retained so that
-//   mirage-executor continues to compile.
-//   TODO(V3-COMPAT): Remove after executor migrates to V3 field model.
-// - `influence_scalars()` is the NEW V3 interface, exposed as a stub.
-//   TODO(V3-TOPOLOGY): Implement real edge-weight accumulation.
-// - `thermal_state: ChunkState` on TopologyNode is COMPAT.
-//   TODO(V3-COMPAT): Replace with `activation_pull: f32` once
-//   downstream code no longer reads the discrete thermal_state field.
+// DETERMINISTIC GUARANTEES (V5.5):
+//   * influence_scalars()       — pure, deterministic, allocation-minimal
+//   * influence_scalars_into()  — zero-alloc variant, same algorithm
+//   * add_node() ordering       — sequential, index-stable
+//   * rebalance_edges()         — stable sort (descending frequency)
+//   * check_alignment()         — pure length comparison, no side effects
+//
+// COMPAT:
+//   propagate_thermal() and wake_node() are V2 compat shims retained
+//   only for mirage-executor backward compatibility. They MUST NOT be
+//   extended with new logic. Remove after executor migrates to V3.
 // ===================================================================
 
 use mirage_core::runtime::{ChunkState, ThermalSystem};
 
 /// Execution lanes represent different processing domains in the topology graph.
 ///
-/// TODO(V3): ExecutionLane will become an activation-domain tag rather than a
-/// discrete scheduler lane.  Retained for executor compatibility.
+/// Each lane tags a topology node with its processing domain. The activation
+/// solver uses lane membership to group nodes for deterministic batch traversal.
+/// V5.5: Lane IDs are stable and must not change across ticks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionLane {
     Physics,
@@ -48,10 +52,12 @@ pub enum ExecutionLane {
 
 /// Topology node represents an execution region (chunk-level).
 ///
-/// TODO(V3-COMPAT): `thermal_state` is a discrete ChunkState enum —
-/// antithetical to the V3 continuous field model.  Replace with
-/// `activation_pull: f32` once the activation field is the primary
-/// authority.  Keep for now for downstream compat.
+/// `thermal_state` is retained for backward compatibility with the executor
+/// thermal system. For all new code, use `activation_pull: f32` which is
+/// the V5.5 continuous field authority.
+///
+/// `id` must equal the node's sequential index in TopologyGraph::nodes.
+/// Use `add_node_for_cell()` to enforce this invariant at construction time.
 #[derive(Debug, Clone)]
 pub struct TopologyNode {
     pub id:                     usize,
@@ -71,17 +77,20 @@ pub struct TopologyNode {
 
 /// Simple adjacency-style topology graph.
 ///
-/// # V3 Role: Activation Influence Graph
+/// # V5.5 Role: Activation Influence Graph
 /// The graph provides `influence_scalars()` — a flat `Vec<f32>` that maps
 /// each node index to a continuous topology influence weight in `[0.0, 1.0]`.
 /// The `ActivationSolver` consumes this slice each tick to propagate
 /// topology-driven pressure across the activation field.
 ///
-/// # TODO(V3-TOPOLOGY)
-/// Implement `influence_scalars()` using real edge-weight accumulation:
-///   for each node i, sum the `activation_pull` of all in-edges and
-///   normalise.  Currently returns a flat best-effort estimate from
-///   node.activation_pull.
+/// # Determinism Contract (V5.5)
+/// - `influence_scalars()` is a pure function of node/edge state. Same input → same output.
+/// - `add_node()` assigns sequential IDs. Field-aligned graphs use `add_node_for_cell()`.
+/// - `rebalance_edges()` uses a stable descending sort by frequency.
+///
+/// # Sole Owner
+/// Defined exclusively in `mirage-mts`. No other crate defines this type.
+
 /// Result of a topology-to-field alignment check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AlignmentResult {
@@ -149,8 +158,8 @@ impl TopologyGraph {
     /// Panics if `cell_idx != self.nodes.len()` — the node must be added
     /// in strictly sequential field-cell order to maintain alignment.
     ///
-    /// TODO(V3-TOPOLOGY-ALIGNMENT): All callers should migrate to this API
-    /// instead of `add_node()` to prevent silent index misalignment.
+    /// V5.5: All new callers must use this API (not `add_node()`) to
+    /// prevent silent index misalignment with the activation field.
     pub fn add_node_for_cell(&mut self, cell_idx: usize, node: TopologyNode) -> usize {
         debug_assert_eq!(
             cell_idx, self.nodes.len(),
@@ -219,9 +228,9 @@ impl TopologyGraph {
     /// Returns an `AlignmentResult` describing the alignment state.
     /// This is a zero-cost check (just a length comparison).
     ///
-    /// # Recommended Usage
-    /// Call at the end of topology construction and at the start of
-    /// each MKRWorld::tick() Phase 0 in debug builds.
+    /// # V5.5 Usage
+    /// Call at topology construction time and at the start of each
+    /// `MKRWorld::tick()` Phase 0 in debug builds to detect misalignment early.
     pub fn check_alignment(&self, field_len: usize) -> AlignmentResult {
         let n = self.nodes.len();
         if n == 0 { return AlignmentResult::Empty; }
@@ -252,13 +261,11 @@ impl TopologyGraph {
         );
         #[cfg(debug_assertions)]
         if self.nodes.len() < field_len {
-            // Partial topology is valid during migration — warn but don't panic.
-            // TODO(V3-TOPOLOGY-ALIGNMENT): Remove this warning once all callers
-            // use add_node_for_cell() and full-field topology is enforced.
+            // Partial topology is valid during executor migration — warn but don't panic.
             if self.nodes.len() > 0 && field_len > self.nodes.len() + 1 {
                 // Only warn when the gap is large (>1) to avoid test noise
                 eprintln!(
-                    "[V3-TOPOLOGY-ALIGNMENT] partial topology: {} nodes / {} cells — \
+                    "[V5.5-TOPOLOGY-ALIGNMENT] partial topology: {} nodes / {} cells — \
                      cells {}..{} receive no topology influence",
                     self.nodes.len(), field_len, self.nodes.len(), field_len - 1
                 );
@@ -383,9 +390,8 @@ impl TopologyGraph {
     /// Caller must ensure `buffer.len() >= self.nodes.len()`.
     /// If the buffer is too short, it is resized.
     ///
-    /// # TODO(V3-TOPOLOGY-SPARSE): Once influence computation is frontier-aware,
-    /// this becomes the primary entry point and influence_scalars() becomes
-    /// a convenience wrapper calling this.
+    /// V5.5: This is the preferred zero-allocation entry point for production
+    /// tick loops. `influence_scalars()` is a convenience wrapper.
     pub fn influence_scalars_into(&self, buffer: &mut Vec<f32>) {
         let n = self.nodes.len();
         if n == 0 { buffer.clear(); return; }
@@ -503,17 +509,15 @@ impl TopologyGraph {
     }
 
     // ------------------------------------------------------------------
-    // COMPAT: V2 thermal propagation
-    // TODO(V3-COMPAT): Remove after executor migrates to V3 field model.
+    // COMPAT: V2 thermal propagation — executor bridge only.
+    // Do NOT extend with new logic. Remove after executor migrates to V3.
     // ------------------------------------------------------------------
 
-    /// TODO(V3-COMPAT): Propagates thermal heat between ThermalSystem
-    /// nodes along edges.  This is a discrete, threshold-driven method —
-    /// it should NOT be extended with new logic.
-    ///
+    /// Propagates thermal heat between ThermalSystem nodes along edges.
+    /// This is a discrete, threshold-driven method — a V2 compatibility shim.
     /// New code must use `influence_scalars()` + `ActivationSolver` instead.
     ///
-    /// Retained for: mirage-executor backward compatibility.
+    /// Retained for: mirage-executor backward compatibility ONLY.
     pub fn propagate_thermal(&mut self, thermal_system: &mut ThermalSystem) {
         // TODO(V3-COMPAT): This entire method is a compatibility shim.
         // It branches on discrete state values — the opposite of V3 design.
@@ -539,8 +543,8 @@ impl TopologyGraph {
         }
     }
 
-    /// TODO(V3-COMPAT): Discrete node wake — increases thermal heat.
-    /// Use `set_activation_pull()` + field injection for V3 code.
+    /// V2 compat: discrete node wake — increases thermal heat.
+    /// Use `set_activation_pull()` + field injection for all new code.
     pub fn wake_node(&mut self, idx: usize, thermal_system: &mut ThermalSystem) {
         // TODO(V3-COMPAT): Hardcoded threshold-only scheduling assumption.
         thermal_system.heat_chunk(idx, 0.5);

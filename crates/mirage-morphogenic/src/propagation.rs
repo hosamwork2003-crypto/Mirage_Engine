@@ -143,6 +143,115 @@ impl MorphogenicRealizer {
     }
 }
 
+// ----------------------
+// Deterministic decay scheduling
+// ----------------------
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeterministicDecayDescriptor {
+    pub sequence_index: u64,
+    pub target_index: usize,
+    pub decay_factor: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeterministicDecaySequence {
+    pub descriptors: Vec<DeterministicDecayDescriptor>,
+}
+
+impl DeterministicDecaySequence {
+    pub fn new() -> Self { Self { descriptors: Vec::new() } }
+
+    /// Stable sort according to sequence_index ASC, then target_index ASC.
+    pub fn stable_sort(&mut self) {
+        self.descriptors.sort_by(|a, b| a.sequence_index.cmp(&b.sequence_index).then_with(|| a.target_index.cmp(&b.target_index)));
+    }
+}
+
+/// Apply a deterministic decay sequence to a StructuralContinuityField.
+pub fn apply_decay_sequence(
+    field: &mut crate::continuity::StructuralContinuityField,
+    sequence: &DeterministicDecaySequence,
+) {
+    // Clone and sort descriptors to keep input immutable.
+    let mut descs = sequence.descriptors.clone();
+    descs.sort_by(|a, b| a.sequence_index.cmp(&b.sequence_index).then_with(|| a.target_index.cmp(&b.target_index)));
+    for d in descs.iter() {
+        if d.target_index >= field.len() { continue; }
+        let curr = field.get(d.target_index).unwrap_or(0.0);
+        // Interpret decay_factor as the multiplier to apply (0.0..1.0).
+        let f = d.decay_factor.clamp(0.0, 1.0);
+        field.set(d.target_index, (curr * f).clamp(0.0, 1.0));
+    }
+}
+
+// ----------------------
+// Structural realization history buffer
+// ----------------------
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructuralHistoryBuffer {
+    frames: Vec<StructuralRealizationFrame>,
+}
+
+impl StructuralHistoryBuffer {
+    pub fn new() -> Self { Self { frames: Vec::new() } }
+
+    pub fn push_frame(&mut self, frame: StructuralRealizationFrame) {
+        self.frames.push(frame);
+    }
+
+    pub fn latest(&self) -> Option<&StructuralRealizationFrame> { self.frames.last() }
+
+    pub fn frames(&self) -> &[StructuralRealizationFrame] { &self.frames }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    use crate::continuity::ContinuitySnapshot;
+    use crate::state::StructuralState;
+
+    #[test]
+    fn deterministic_decay_sequence_ordering() {
+        let mut seq = DeterministicDecaySequence::new();
+        seq.descriptors.push(DeterministicDecayDescriptor { sequence_index: 2, target_index: 1, decay_factor: 0.5 });
+        seq.descriptors.push(DeterministicDecayDescriptor { sequence_index: 1, target_index: 2, decay_factor: 0.5 });
+        seq.descriptors.push(DeterministicDecayDescriptor { sequence_index: 1, target_index: 0, decay_factor: 0.5 });
+        seq.stable_sort();
+        assert_eq!(seq.descriptors[0].sequence_index, 1);
+        assert_eq!(seq.descriptors[0].target_index, 0);
+        assert_eq!(seq.descriptors[1].sequence_index, 1);
+        assert_eq!(seq.descriptors[1].target_index, 2);
+    }
+
+    #[test]
+    fn apply_decay_sequence_applies_multiplicatively() {
+        let mut field = crate::continuity::StructuralContinuityField::new(3);
+        field.set(0, 1.0); field.set(1, 0.5); field.set(2, 0.2);
+        let mut seq = DeterministicDecaySequence::new();
+        seq.descriptors.push(DeterministicDecayDescriptor { sequence_index: 0, target_index: 1, decay_factor: 0.5 });
+        seq.descriptors.push(DeterministicDecayDescriptor { sequence_index: 0, target_index: 2, decay_factor: 0.0 });
+        apply_decay_sequence(&mut field, &seq);
+        assert!((field.get(0).unwrap() - 1.0).abs() < 1e-6);
+        assert!((field.get(1).unwrap() - 0.25).abs() < 1e-6);
+        assert!((field.get(2).unwrap() - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn structural_history_buffer_append_order() {
+        let mut buf = StructuralHistoryBuffer::new();
+        let s = ContinuitySnapshot::new(1, vec![0.0]);
+        let f1 = StructuralRealizationFrame { tick: 1, epoch: 1, snapshot: s.clone() };
+        let f2 = StructuralRealizationFrame { tick: 2, epoch: 2, snapshot: s.clone() };
+        buf.push_frame(f1.clone());
+        buf.push_frame(f2.clone());
+        assert_eq!(buf.frames().len(), 2);
+        assert_eq!(buf.frames()[0].epoch, 1);
+        assert_eq!(buf.frames()[1].epoch, 2);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
